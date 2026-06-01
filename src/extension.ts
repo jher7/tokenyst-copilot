@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as os from 'os';
 import * as path from 'path';
-import { loadConfig, saveConfig, getMonthlySummary } from './core/local-config';
+import { loadConfig, saveConfig, getMonthlySummary, deleteManualAllocation, isManualAllocation, backfillManualExternalIds } from './core/local-config';
 import { CREDITS_PER_USD, usdToCredits } from './core/pricing';
 import { AnalyticsWebviewProvider } from './ui/AnalyticsWebviewProvider';
 import { StatusBarManager } from './ui/StatusBarItem';
@@ -231,6 +231,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         at: new Date().toISOString(),
         provider: 'copilot',
         repo: repo && repo.length > 0 ? repo : undefined,
+        externalId: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        manual: true,
       };
 
       current.allocations.push(allocation);
@@ -240,6 +242,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       vscode.window.showInformationMessage(
         `Added allocation: ${creditsNum.toLocaleString(undefined, { maximumFractionDigits: 1 })} credits (${model || 'unknown'})`,
       );
+    }),
+
+    vscode.commands.registerCommand('tokenyst.deleteAllocation', async (externalId?: string) => {
+      if (!externalId) {
+        const cfg = await backfillManualExternalIds();
+        const manuals = cfg.allocations.filter(isManualAllocation);
+        if (manuals.length === 0) {
+          vscode.window.showInformationMessage('No manual allocations to delete.');
+          return;
+        }
+        const items = manuals.map(a => ({
+          label: `${(a.costUsd * CREDITS_PER_USD).toLocaleString(undefined, { maximumFractionDigits: 1 })} credits`,
+          description: `${a.model}${a.repo ? ` · ${a.repo}` : ''} · ${new Date(a.at).toLocaleDateString()}`,
+          externalId: a.externalId!,
+        }));
+        const pick = await vscode.window.showQuickPick(items, { title: 'Delete Manual Allocation', placeHolder: 'Select an allocation to delete' });
+        if (!pick) return;
+        externalId = pick.externalId;
+      }
+      const result = await deleteManualAllocation(externalId);
+      if (!result.success) {
+        vscode.window.showErrorMessage(`Failed to delete allocation: ${result.error}`);
+        return;
+      }
+      refreshAll();
+      vscode.window.showInformationMessage('Manual allocation deleted.');
     }),
   );
 

@@ -35,7 +35,7 @@ Tokenyst is **strictly local**. It reads Copilot's own session files on your mac
 - **Budget periods** — calendar month by default, or anchored to your plan's renewal day
 - **Real token counts** — Tokenyst reads the actual input/output token counts Copilot Chat records for each request (input is context-inclusive), so cost reflects real usage rather than a guess
 - **Historical import** — backfill stats from your existing Copilot session history
-- **Manual allocations** — add custom allocations directly from the UI with credit amount, model name, and optional repository tracking
+- **Manual allocations** — add custom allocations directly from the UI with credit amount, model name, and optional repository tracking, and remove them again from a picker list
 
 ## How it works
 
@@ -67,7 +67,8 @@ All commands are available from the Command Palette under the **Tokenyst** categ
 | **Set Renewal Date** | Day of month (1–31) your plan renews; blank uses the calendar month |
 | **Enable Copilot Tracking** | Start watching Copilot session files; offers a historical import |
 | **Disable Copilot Tracking** | Stop tracking |
-| **Manual Add Allocation** | Add a custom allocation with credit amount, model, and optional repository |
+| **Add Manual Allocation** | Add a custom allocation with credit amount, model, and optional repository |
+| **Delete Manual Allocation** | Pick from a list of your manually-added allocations and remove one |
 | **Import Historical Usage** | Backfill allocations from the last 30 days of sessions |
 | **Force Sync** | Re-scan sessions and update usage immediately |
 | **Refresh** | Re-scan sessions and refresh the UI |
@@ -88,6 +89,37 @@ Tokenyst keeps everything on your machine:
 - Reads your VS Code Copilot Chat session files under `workspaceStorage/*/chatSessions/` (written by the Copilot Chat extension)
 
 Tokenyst makes **no network requests** and has **no external dependencies** — it reads only local Copilot Chat session files and writes only to `~/.tokenyst/`. Pricing data is baked into the extension; no pricing or billing service is contacted.
+
+### Editing allocations by hand
+
+Normally you remove a manual allocation with **Tokenyst: Delete Manual Allocation** (a picker lists every manually-added entry). If you'd rather edit the data directly — for example to fix a typo or bulk-remove entries — you can edit `~/.tokenyst/config.json` yourself:
+
+1. **Close VS Code** (or at least the Tokenyst view) so the file isn't rewritten under you.
+2. Open `~/.tokenyst/config.json`. On Windows this is `C:\Users\<you>\.tokenyst\config.json`; on macOS/Linux it's `~/.tokenyst/config.json`.
+3. Find the `allocations` array. Manually-added entries are the ones with `"manual": true` and/or an `"externalId"` starting with `"manual-"`:
+
+   ```json
+   {
+     "costUsd": 0.5,
+     "model": "copilot-gpt-4",
+     "inputTokens": null,
+     "outputTokens": null,
+     "cacheCreationTokens": null,
+     "cacheReadTokens": null,
+     "filesModified": [],
+     "at": "2026-06-01T12:42:46.000Z",
+     "provider": "copilot",
+     "externalId": "manual-1717245766000-a1b2c",
+     "manual": true
+   }
+   ```
+
+   > Older manual entries created before tagging existed may have neither marker — they're identifiable as `"provider": "copilot"` entries with all four token fields (`inputTokens`, `outputTokens`, `cacheCreationTokens`, `cacheReadTokens`) set to `null`. Tokenyst treats those as manual too.
+
+4. Delete the entire object (including its surrounding `{ }` and the trailing comma) from the array, then save. Make sure the file is still valid JSON.
+5. Reopen VS Code; the Usage Stats panel will reflect the change on the next refresh.
+
+Only delete entries you recognize as manual. Synced Copilot allocations always carry numeric token counts and a `copilot-chat-…` `externalId`; removing those just makes them reappear on the next sync.
 
 > **Note:** Spend is shown in **credits** to match Copilot's usage-based billing (100 credits = $1). Where Copilot records a real credit value for a request, Tokenyst uses it directly; otherwise it estimates from token counts and a built-in pricing table (with a cache discount for the repeated system prompt and tool definitions), so those figures are approximate.
 

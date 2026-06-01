@@ -26,6 +26,7 @@ export interface LocalAllocation {
   provider: ProviderId;
   externalId?: string;
   repo?: string;
+  manual?: boolean;
 }
 
 export interface LocalConfig {
@@ -66,6 +67,7 @@ function normalizeAllocation(a: unknown): LocalAllocation {
     provider: (raw.provider === 'copilot' ? 'copilot' : 'claude') as ProviderId,
     externalId: raw.externalId != null ? String(raw.externalId) : undefined,
     repo: raw.repo != null ? String(raw.repo) : undefined,
+    manual: raw.manual === true ? true : undefined,
   };
 }
 
@@ -234,6 +236,57 @@ export async function upsertCopilotSessionAllocation(
   });
   await saveConfig(cfg);
   return { success: true, inserted: true };
+}
+
+/**
+ * A manual allocation is one the user entered by hand. Detected by, in order:
+ *  - `manual: true` (current entries), or
+ *  - a `manual-*` externalId (entries created before the flag existed), or
+ *  - a Copilot entry with all four token counts null. Synced/imported entries
+ *    come from `SessionResult`, where those fields are required numbers, so only
+ *    a hand-entered allocation leaves them null. This catches legacy manual
+ *    entries that have neither the flag nor a `manual-*` externalId.
+ */
+export function isManualAllocation(a: LocalAllocation): boolean {
+  if (a.manual === true) return true;
+  if (a.externalId?.startsWith('manual-')) return true;
+  return (
+    a.provider === 'copilot' &&
+    a.inputTokens === null &&
+    a.outputTokens === null &&
+    a.cacheCreationTokens === null &&
+    a.cacheReadTokens === null
+  );
+}
+
+/**
+ * Assign a stable `manual-*` externalId to any manual allocation that lacks one
+ * (legacy entries detected by the null-token signal), persisting if anything
+ * changed. Returns the config so callers can list/delete by externalId reliably.
+ */
+export async function backfillManualExternalIds(): Promise<LocalConfig> {
+  const cfg = await loadConfig();
+  let changed = false;
+  for (const a of cfg.allocations) {
+    if (isManualAllocation(a) && !a.externalId) {
+      a.externalId = `manual-${new Date(a.at).getTime()}-${Math.random().toString(36).slice(2, 7)}`;
+      a.manual = true;
+      changed = true;
+    }
+  }
+  if (changed) await saveConfig(cfg);
+  return cfg;
+}
+
+export async function deleteManualAllocation(
+  externalId: string,
+): Promise<{ success: boolean; error?: string }> {
+  const cfg = await loadConfig();
+  const idx = cfg.allocations.findIndex(a => a.externalId === externalId && isManualAllocation(a));
+  if (idx === -1) return { success: false, error: `Manual allocation "${externalId}" not found` };
+  cfg.allocations.splice(idx, 1);
+  await saveConfig(cfg);
+  return { success: true };
 }
 
 export async function updateAllocationCost(
