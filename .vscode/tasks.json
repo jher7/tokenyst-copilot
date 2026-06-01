@@ -1,0 +1,22 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build",
+      "type": "shell",
+      "command": "node node_modules/typescript/bin/tsc",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$tsc"],
+      "detail": "Compile TypeScript"
+    },
+    {
+      "label": "watch",
+      "type": "shell",
+      "command": "node node_modules/typescript/bin/tsc --watch",
+      "group": "build",
+      "problemMatcher": ["$tsc-watch"],
+      "isBackground": true,
+      "detail": "Compile TypeScript in watch mode"
+    }
+  ]
+}

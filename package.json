@@ -1,0 +1,96 @@
+{
+  "name": "tokenyst-copilot",
+  "displayName": "Tokenyst",
+  "description": "GitHub Copilot usage tracking for budget management",
+  "version": "0.1.2",
+  "author": "Joshua Herrera",
+  "publisher": "TokenystCopilot",
+  "icon": "resources/icons/tokenyst-marketplace.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jher7/tokenyst-copilot.git"
+  },
+  "homepage": "https://github.com/jher7/tokenyst-copilot#readme",
+  "bugs": {
+    "url": "https://github.com/jher7/tokenyst-copilot/issues"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "tokenyst-copilot",
+          "title": "Tokenyst",
+          "icon": "resources/icons/tokenyst.svg"
+        }
+      ]
+    },
+    "views": {
+      "tokenyst-copilot": [
+        {
+          "id": "tokenyst.analytics",
+          "name": "Usage Stats",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      { "command": "tokenyst.setMonthlyBudget","title": "Set Monthly Budget",        "category": "Tokenyst" },
+      { "command": "tokenyst.setRenewalDate",  "title": "Set Renewal Date",          "category": "Tokenyst" },
+      { "command": "tokenyst.forceSync",       "title": "Force Sync",                "category": "Tokenyst" },
+      { "command": "tokenyst.enableTracking",  "title": "Enable Copilot Tracking",  "category": "Tokenyst" },
+      { "command": "tokenyst.disableTracking", "title": "Disable Copilot Tracking", "category": "Tokenyst" },
+      { "command": "tokenyst.importHistory",   "title": "Import Historical Usage",   "category": "Tokenyst" },
+      {
+        "command": "tokenyst.refresh",
+        "title": "Refresh",
+        "category": "Tokenyst",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "tokenyst.refresh",
+          "when": "view == tokenyst.analytics",
+          "group": "navigation@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Tokenyst",
+      "properties": {
+        "tokenyst.syncIntervalSeconds": {
+          "type": "number",
+          "default": 300,
+          "description": "How often (in seconds) to scan Copilot session events in the background."
+        },
+        "tokenyst.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show active budget usage in the status bar."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "tsc",
+    "watch": "tsc -watch",
+    "package": "vsce package",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.5"
+  }
+}

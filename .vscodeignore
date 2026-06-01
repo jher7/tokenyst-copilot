@@ -1,0 +1,25 @@
+# Source & build config (only the compiled dist/ ships)
+src/**
+tsconfig.json
+**/*.map
+
+# Dev tooling & VCS
+.git/**
+.github/**
+.vscode/**
+.claude/**
+node_modules/**
+
+# Repo-only content that must not ship in the extension
+demo-videos/**
+memory/**
+scripts/**
+
+# Lockfiles & meta
+package-lock.json
+pnpm-lock.yaml
+pnpm-workspace.yaml
+.gitignore
+.vscodeignore
+CLAUDE.md
+*.vsix
