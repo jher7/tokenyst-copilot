@@ -123,6 +123,11 @@ Only delete entries you recognize as manual. Synced Copilot allocations always c
 
 > **Note:** Spend is shown in **credits** to match Copilot's usage-based billing (100 credits = $1). Where Copilot records a real credit value for a request, Tokenyst uses it directly; otherwise it estimates from token counts and a built-in pricing table (with a cache discount for the repeated system prompt and tool definitions), so those figures are approximate.
 
+## Contact
+Please send any questions or comments to **contact@tokenyst.dev**
+
+> **Note:** Are you an engineering manager or team lead? I'm exploring a team dashboard and other QOL features, please contact if interested.
+
 ## License
 
 [MIT](LICENSE)
