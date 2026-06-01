@@ -2,7 +2,7 @@
   "name": "tokenyst-copilot",
   "displayName": "Tokenyst",
   "description": "GitHub Copilot usage tracking for budget management",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "author": "Joshua Herrera",
   "publisher": "TokenystCopilot",
   "icon": "resources/icons/tokenyst-marketplace.png",
@@ -18,8 +18,12 @@
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
@@ -41,12 +45,36 @@
       ]
     },
     "commands": [
-      { "command": "tokenyst.setMonthlyBudget","title": "Set Monthly Budget",        "category": "Tokenyst" },
-      { "command": "tokenyst.setRenewalDate",  "title": "Set Renewal Date",          "category": "Tokenyst" },
-      { "command": "tokenyst.forceSync",       "title": "Force Sync",                "category": "Tokenyst" },
-      { "command": "tokenyst.enableTracking",  "title": "Enable Copilot Tracking",  "category": "Tokenyst" },
-      { "command": "tokenyst.disableTracking", "title": "Disable Copilot Tracking", "category": "Tokenyst" },
-      { "command": "tokenyst.importHistory",   "title": "Import Historical Usage",   "category": "Tokenyst" },
+      {
+        "command": "tokenyst.setMonthlyBudget",
+        "title": "Set Monthly Budget",
+        "category": "Tokenyst"
+      },
+      {
+        "command": "tokenyst.setRenewalDate",
+        "title": "Set Renewal Date",
+        "category": "Tokenyst"
+      },
+      {
+        "command": "tokenyst.forceSync",
+        "title": "Force Sync",
+        "category": "Tokenyst"
+      },
+      {
+        "command": "tokenyst.enableTracking",
+        "title": "Enable Copilot Tracking",
+        "category": "Tokenyst"
+      },
+      {
+        "command": "tokenyst.disableTracking",
+        "title": "Disable Copilot Tracking",
+        "category": "Tokenyst"
+      },
+      {
+        "command": "tokenyst.importHistory",
+        "title": "Import Historical Usage",
+        "category": "Tokenyst"
+      },
       {
         "command": "tokenyst.refresh",
         "title": "Refresh",
@@ -92,5 +120,8 @@
     "@vscode/vsce": "^3.0.0",
     "typescript": "^5.0.0",
     "vitest": "^4.1.5"
+  },
+  "dependencies": {
+    "vsce": "^2.15.0"
   }
 }

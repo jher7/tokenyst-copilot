@@ -35,6 +35,7 @@ Tokenyst is **strictly local**. It reads Copilot's own session files on your mac
 - **Budget periods** — calendar month by default, or anchored to your plan's renewal day
 - **Real token counts** — Tokenyst reads the actual input/output token counts Copilot Chat records for each request (input is context-inclusive), so cost reflects real usage rather than a guess
 - **Historical import** — backfill stats from your existing Copilot session history
+- **Manual allocations** — add custom allocations directly from the UI with credit amount, model name, and optional repository tracking
 
 ## How it works
 
@@ -66,6 +67,7 @@ All commands are available from the Command Palette under the **Tokenyst** categ
 | **Set Renewal Date** | Day of month (1–31) your plan renews; blank uses the calendar month |
 | **Enable Copilot Tracking** | Start watching Copilot session files; offers a historical import |
 | **Disable Copilot Tracking** | Stop tracking |
+| **Manual Add Allocation** | Add a custom allocation with credit amount, model, and optional repository |
 | **Import Historical Usage** | Backfill allocations from the last 30 days of sessions |
 | **Force Sync** | Re-scan sessions and update usage immediately |
 | **Refresh** | Re-scan sessions and refresh the UI |

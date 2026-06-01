@@ -190,6 +190,57 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       refreshAll();
       vscode.window.showInformationMessage('Tokenyst: sync complete.');
     }),
+
+    vscode.commands.registerCommand('tokenyst.addAllocation', async () => {
+      // Get the amount in credits
+      const creditsStr = await vscode.window.showInputBox({
+        title: 'Add Allocation',
+        prompt: 'Amount used (in credits)',
+        validateInput: (v) => {
+          const n = Number(v);
+          return !Number.isFinite(n) || n <= 0 ? 'Enter a positive number of credits' : null;
+        },
+      });
+      if (creditsStr === undefined) return;
+
+      const credits = Number(creditsStr);
+      const costUsd = credits / CREDITS_PER_USD;
+
+      // Get the model name
+      const model = await vscode.window.showInputBox({
+        prompt: 'Model name (e.g., gpt-4, claude-3-opus)',
+        value: 'copilot-gpt-4',
+      });
+      if (model === undefined) return;
+
+      // Get optional repo name
+      const repo = await vscode.window.showInputBox({
+        prompt: 'Repository (optional)',
+        value: '',
+      });
+
+      const current = await loadConfig();
+      const allocation: typeof current.allocations[0] = {
+        costUsd,
+        model: model || 'unknown',
+        inputTokens: null,
+        outputTokens: null,
+        cacheCreationTokens: null,
+        cacheReadTokens: null,
+        filesModified: [],
+        at: new Date().toISOString(),
+        provider: 'copilot',
+        repo: repo && repo.length > 0 ? repo : undefined,
+      };
+
+      current.allocations.push(allocation);
+      await saveConfig(current);
+      refreshAll();
+      const creditsNum = costUsd * CREDITS_PER_USD;
+      vscode.window.showInformationMessage(
+        `Added allocation: ${creditsNum.toLocaleString(undefined, { maximumFractionDigits: 1 })} credits (${model || 'unknown'})`,
+      );
+    }),
   );
 
   // Background sync loop

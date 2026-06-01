@@ -21,6 +21,8 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
           await vscode.commands.executeCommand('tokenyst.forceSync'); break;
         case 'setRenewalDate':
           await vscode.commands.executeCommand('tokenyst.setRenewalDate'); break;
+        case 'addAllocation':
+          await vscode.commands.executeCommand('tokenyst.addAllocation'); break;
         case 'refresh':
           await vscode.commands.executeCommand('tokenyst.refresh'); break;
       }
@@ -914,6 +916,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
               ? \`<button class="tracking-btn" data-action="disableTracking">Disable</button>\`
               : \`<button class="tracking-btn" data-action="enableTracking">Enable</button>\`
             }
+            <button class="tracking-btn" data-action="addAllocation">Manual Add</button>
             <button class="tracking-btn" data-action="refresh">↻</button>
           </div>
         </div>
