@@ -12,6 +12,10 @@ Section guide (omit any that are empty for a release):
 
 <!-- ## [Unreleased] -->
 
+## [0.2.1] - 2026-06-02
+### Fixed
+- Fixed tracking unexpectedly disabling itself during normal use, caused by a config-file write race when syncing and importing usage at the same time
+
 ## [0.2.0] - 2026-06-02
 ### Added
 - Import historical usage from last 30 days, 90 days, or all usage on disk

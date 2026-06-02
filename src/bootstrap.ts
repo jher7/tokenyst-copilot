@@ -1,4 +1,4 @@
-import { loadConfig, saveConfig, upsertCopilotSessionAllocation } from './core/local-config';
+import { loadConfig, mutateConfig, upsertCopilotSessionAllocation } from './core/local-config';
 import {
   findChatSessionFiles,
   parseChatSession,
@@ -112,9 +112,7 @@ async function _sync(): Promise<void> {
   }
   debugLog(`bootstrap: processed ${touched} session-model usage record(s)`);
 
-  const updatedCfg = await loadConfig();
-  if (updatedCfg.copilot) {
-    updatedCfg.copilot.lastSeenEventsAt = syncedAt;
-    await saveConfig(updatedCfg);
-  }
+  await mutateConfig((cfg) => {
+    if (cfg.copilot) cfg.copilot.lastSeenEventsAt = syncedAt;
+  });
 }
