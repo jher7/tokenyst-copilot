@@ -32,10 +32,23 @@ export interface ChatSessionFile {
   mtimeMs: number;
 }
 
+/**
+ * The running VS Code build's `User` directory, injected at activation from
+ * `context.globalStorageUri`. Makes the extension build-aware (Stable vs Insiders
+ * vs portable/OSS) without hardcoding folder names. See `setVSCodeUserDir`.
+ */
+let injectedUserDir: string | undefined;
+
+/** Set the `User` directory derived from the host's `globalStorageUri`. */
+export function setVSCodeUserDir(dir: string | undefined): void {
+  injectedUserDir = dir;
+}
+
 /** VS Code's `User` directory, where `workspaceStorage/` lives. */
 export function getVSCodeUserDir(): string {
   const override = process.env['TOKENYST_VSCODE_USER_DIR'];
   if (override) return override;
+  if (injectedUserDir) return injectedUserDir;
   if (process.platform === 'win32') {
     const appData = process.env['APPDATA'] ?? path.join(os.homedir(), 'AppData', 'Roaming');
     return path.join(appData, 'Code', 'User');

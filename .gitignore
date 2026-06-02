@@ -2,7 +2,8 @@
 /node_modules
 /dist
 *.vsix
-demo-videos/
+demo/
 memory/
 CLAUDE.md
 scripts/
+icon/
