@@ -29,6 +29,9 @@ export interface LocalAllocation {
   manual?: boolean;
 }
 
+/** Unit used to display amounts in the UI. Cost is always stored in USD. */
+export type DisplayUnit = 'credits' | 'dollars';
+
 export interface LocalConfig {
   allocations: LocalAllocation[];
   enabled: boolean;
@@ -36,6 +39,8 @@ export interface LocalConfig {
   monthlyBudgetUsd?: number | null;
   /** Day of month (1-31) the plan renews; null/unset = calendar month (day 1). */
   renewalDay?: number | null;
+  /** Display unit for the UI/status bar; defaults to 'credits'. */
+  displayUnit?: DisplayUnit;
 }
 
 const DEFAULT_CONFIG: LocalConfig = {
@@ -43,6 +48,7 @@ const DEFAULT_CONFIG: LocalConfig = {
   enabled: true,
   monthlyBudgetUsd: null,
   renewalDay: null,
+  displayUnit: 'credits',
 };
 
 export function getConfigDir(): string {
@@ -346,6 +352,7 @@ export async function getMonthlySummary(): Promise<{
   renewalDay: number | null;
   periodStart: string;
   periodEnd: string;
+  displayUnit: DisplayUnit;
 }> {
   const cfg = await loadConfig();
   const period = getCurrentPeriod(cfg.renewalDay);
@@ -365,5 +372,6 @@ export async function getMonthlySummary(): Promise<{
     renewalDay: period.renewalDay,
     periodStart: period.start.toISOString(),
     periodEnd: period.end.toISOString(),
+    displayUnit: cfg.displayUnit ?? 'credits',
   };
 }
