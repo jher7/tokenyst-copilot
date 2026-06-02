@@ -29,6 +29,12 @@ export interface LocalAllocation {
   manual?: boolean;
 }
 
+/** Unit used to display amounts in the UI. Cost is always stored in USD. */
+export type DisplayUnit = 'credits' | 'dollars';
+
+/** Which spend total the status bar shows; toggled by clicking the item. */
+export type StatusBarMetric = 'today' | 'period';
+
 export interface LocalConfig {
   allocations: LocalAllocation[];
   enabled: boolean;
@@ -36,6 +42,10 @@ export interface LocalConfig {
   monthlyBudgetUsd?: number | null;
   /** Day of month (1-31) the plan renews; null/unset = calendar month (day 1). */
   renewalDay?: number | null;
+  /** Display unit for the UI/status bar; defaults to 'credits'. */
+  displayUnit?: DisplayUnit;
+  /** Whether the status bar shows today's or this period's spend; defaults to 'period'. */
+  statusBarMetric?: StatusBarMetric;
 }
 
 const DEFAULT_CONFIG: LocalConfig = {
@@ -43,6 +53,8 @@ const DEFAULT_CONFIG: LocalConfig = {
   enabled: true,
   monthlyBudgetUsd: null,
   renewalDay: null,
+  displayUnit: 'credits',
+  statusBarMetric: 'period',
 };
 
 export function getConfigDir(): string {
@@ -343,27 +355,40 @@ export function getCurrentPeriod(renewalDay: number | null | undefined, now: Dat
 export async function getMonthlySummary(): Promise<{
   monthlyBudgetUsd: number | null;
   monthlySpentUsd: number;
+  todaySpentUsd: number;
   renewalDay: number | null;
   periodStart: string;
   periodEnd: string;
+  displayUnit: DisplayUnit;
+  statusBarMetric: StatusBarMetric;
 }> {
   const cfg = await loadConfig();
   const period = getCurrentPeriod(cfg.renewalDay);
   const startMs = period.start.getTime();
   const endMs = period.end.getTime();
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const todayStartMs = todayStart.getTime();
   let monthlySpentUsd = 0;
+  let todaySpentUsd = 0;
   for (const a of cfg.allocations) {
     if (a.provider !== 'copilot') continue;
     const t = new Date(a.at).getTime();
     if (t >= startMs && t < endMs) {
       monthlySpentUsd += a.costUsd;
     }
+    if (t >= todayStartMs) {
+      todaySpentUsd += a.costUsd;
+    }
   }
   return {
     monthlyBudgetUsd: cfg.monthlyBudgetUsd ?? null,
     monthlySpentUsd,
+    todaySpentUsd,
     renewalDay: period.renewalDay,
     periodStart: period.start.toISOString(),
     periodEnd: period.end.toISOString(),
+    displayUnit: cfg.displayUnit ?? 'credits',
+    statusBarMetric: cfg.statusBarMetric ?? 'period',
   };
 }

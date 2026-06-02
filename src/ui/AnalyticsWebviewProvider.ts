@@ -25,6 +25,10 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
           await vscode.commands.executeCommand('tokenyst.addAllocation'); break;
         case 'deleteAllocation':
           await vscode.commands.executeCommand('tokenyst.deleteAllocation'); break;
+        case 'toggleUnit':
+          await vscode.commands.executeCommand('tokenyst.toggleUnit'); break;
+        case 'showMenu':
+          await vscode.commands.executeCommand('tokenyst.showMenu'); break;
         case 'refresh':
           await vscode.commands.executeCommand('tokenyst.refresh'); break;
       }
@@ -38,7 +42,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
   async refresh(): Promise<void> {
     if (!this._view) return;
     const cfg = await loadConfig();
-    const { monthlyBudgetUsd, monthlySpentUsd, renewalDay, periodStart, periodEnd } = await getMonthlySummary();
+    const { monthlyBudgetUsd, monthlySpentUsd, renewalDay, periodStart, periodEnd, displayUnit } = await getMonthlySummary();
     this._view.webview.postMessage({
       type: 'update',
       allocations: cfg.allocations,
@@ -48,6 +52,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       renewalDay,
       periodStart,
       periodEnd,
+      displayUnit,
     });
   }
 
@@ -445,6 +450,12 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.2));
       opacity: 1;
     }
+    /* Gear that opens the options menu — slightly larger glyph, square-ish hit area. */
+    .tracking-gear {
+      font-size: 14px;
+      line-height: 1;
+      padding: 2px 6px;
+    }
 
     /* Empty state */
     .empty-state {
@@ -462,9 +473,16 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     const vscode = acquireVsCodeApi();
     const root = document.getElementById('root');
     let lastData = null;
-    let breakdownWindow = 0;
-    let budgetOpen = true;
-    let breakdownOpen = false;
+
+    // UI preferences persisted across panel reloads (VS Code tears the webview
+    // down when the sidebar is hidden). Restored from getState() on load.
+    const persisted = vscode.getState() || {};
+    let breakdownWindow = persisted.breakdownWindow ?? 0;
+    let budgetOpen = persisted.budgetOpen ?? true;
+    let breakdownOpen = persisted.breakdownOpen ?? false;
+    function saveUiState() {
+      vscode.setState({ breakdownWindow, budgetOpen, breakdownOpen });
+    }
     // Billing-period boundaries (ms), supplied by the extension host. Null until first update.
     let periodStartMs = null;
     let periodEndMs = null;
@@ -472,14 +490,24 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
     const CREDITS_PER_USD = ${CREDITS_PER_USD};
+    // Display unit ('credits' | 'dollars'), refreshed from each update. Amounts are
+    // always stored in USD; these formatters convert for display only.
+    let displayUnit = 'credits';
+    function unitLabel() { return displayUnit === 'dollars' ? 'USD' : 'credits'; }
+    // Bare KPI/budget number: "$12.34" in dollars, "1,234" in credits.
     function fmtCreditsNum(usd) {
+      if (displayUnit === 'dollars') {
+        return '$' + usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      }
       return (usd * CREDITS_PER_USD).toLocaleString(undefined, { maximumFractionDigits: 1 });
     }
+    // Amount with a trailing unit word: "$12.34" / "1,234 credits".
     function fmtCredits(usd) {
-      return fmtCreditsNum(usd) + ' credits';
+      return displayUnit === 'dollars' ? fmtCreditsNum(usd) : fmtCreditsNum(usd) + ' credits';
     }
+    // Compact form for bar values: "$12.34" / "1,234 crds".
     function fmtCrds(usd) {
-      return fmtCreditsNum(usd) + ' crds';
+      return displayUnit === 'dollars' ? fmtCreditsNum(usd) : fmtCreditsNum(usd) + ' crds';
     }
 
     function esc(s) {
@@ -872,6 +900,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       if (!data) return;
       lastData = data;
       const { allocations, copilotEnabled, monthlyBudgetUsd, monthlySpentUsd, renewalDay } = data;
+      displayUnit = data.displayUnit === 'dollars' ? 'dollars' : 'credits';
       periodStartMs = data.periodStart ? Date.parse(data.periodStart) : null;
       periodEndMs = data.periodEnd ? Date.parse(data.periodEnd) : null;
 
@@ -914,13 +943,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
             \${copilotEnabled ? 'Tracking enabled' : 'Tracking disabled'}
           </div>
           <div class="tracking-actions">
-            \${copilotEnabled
-              ? \`<button class="tracking-btn" data-action="disableTracking">Disable</button>\`
-              : \`<button class="tracking-btn" data-action="enableTracking">Enable</button>\`
-            }
-            <button class="tracking-btn" data-action="addAllocation">Manual Add</button>
-            <button class="tracking-btn" data-action="deleteAllocation">Remove</button>
-            <button class="tracking-btn" data-action="refresh">↻</button>
+            <button class="tracking-btn tracking-gear" data-action="showMenu" title="Options" aria-label="Options">⚙</button>
           </div>
         </div>
       \`;
@@ -964,12 +987,12 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
           <div class="kpi">
             <div class="kpi-label">Today</div>
             <div class="kpi-value">\${esc(fmtCreditsNum(statsMonth.todaySpent))}</div>
-            <div class="kpi-sub">credits</div>
+            <div class="kpi-sub">\${unitLabel()}</div>
           </div>
           <div class="kpi">
             <div class="kpi-label">This week</div>
             <div class="kpi-value">\${esc(fmtCreditsNum(statsMonth.thisWeekSpent))}</div>
-            <div class="kpi-sub">credits (since Monday)</div>
+            <div class="kpi-sub">\${unitLabel()} (since Monday)</div>
           </div>
         </div>
       \`;
@@ -980,7 +1003,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
           <div class="kpi">
             <div class="kpi-label">Total spent</div>
             <div class="kpi-value">\${esc(fmtCreditsNum(statsBreak.totalSpent))}</div>
-            <div class="kpi-sub">credits</div>
+            <div class="kpi-sub">\${unitLabel()}</div>
           </div>
           <div class="kpi-filter">
             \${breakdownRange ? \`<span class="filter-range">\${esc(breakdownRange)}</span>\` : ''}
@@ -994,17 +1017,17 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
           <div class="kpi">
             <div class="kpi-label">Avg daily</div>
             <div class="kpi-value">\${esc(fmtCreditsNum(statsBreak.avgDaily))}</div>
-            <div class="kpi-sub">credits</div>
+            <div class="kpi-sub">\${unitLabel()}</div>
           </div>
           <div class="kpi">
             <div class="kpi-label">Avg weekly</div>
             <div class="kpi-value">\${esc(fmtCreditsNum(statsBreak.avgWeekly))}</div>
-            <div class="kpi-sub">credits</div>
+            <div class="kpi-sub">\${unitLabel()}</div>
           </div>
           <div class="kpi">
             <div class="kpi-label">Avg monthly</div>
             <div class="kpi-value">\${breakdownWindow === 'month' ? '-' : esc(fmtCreditsNum(statsBreak.avgMonthly))}</div>
-            <div class="kpi-sub">\${breakdownWindow === 'month' ? '&nbsp;' : 'credits'}</div>
+            <div class="kpi-sub">\${breakdownWindow === 'month' ? '&nbsp;' : unitLabel()}</div>
           </div>
         </div>
       \`;
@@ -1090,6 +1113,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       const sel = e.target.closest('.filter-select');
       if (!sel) return;
       breakdownWindow = sel.value === '0' ? 0 : sel.value;
+      saveUiState();
       render(lastData);
     });
 
@@ -1100,6 +1124,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       if (!d) return;
       if (d.dataset.section === 'budget') budgetOpen = d.open;
       else if (d.dataset.section === 'breakdown') breakdownOpen = d.open;
+      saveUiState();
     }, true);
 
     root.addEventListener('click', e => {

@@ -2,7 +2,7 @@
   "name": "tokenyst-copilot",
   "displayName": "Tokenyst",
   "description": "GitHub Copilot usage tracking for budget management",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "author": "Joshua Herrera",
   "publisher": "TokenystCopilot",
   "icon": "resources/icons/tokenyst-marketplace.png",
@@ -89,6 +89,21 @@
       {
         "command": "tokenyst.deleteAllocation",
         "title": "Delete Manual Allocation",
+        "category": "Tokenyst"
+      },
+      {
+        "command": "tokenyst.toggleUnit",
+        "title": "Toggle Display Unit (Credits/Dollars)",
+        "category": "Tokenyst"
+      },
+      {
+        "command": "tokenyst.showMenu",
+        "title": "Show Options Menu",
+        "category": "Tokenyst"
+      },
+      {
+        "command": "tokenyst.toggleStatusBarMetric",
+        "title": "Toggle Status Bar Metric (Today/This Period)",
         "category": "Tokenyst"
       }
     ],

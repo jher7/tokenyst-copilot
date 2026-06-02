@@ -65,7 +65,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
 
     vscode.commands.registerCommand('tokenyst.setMonthlyBudget', async () => {
-      const { monthlyBudgetUsd } = await getMonthlySummary();
+      const { monthlyBudgetUsd, displayUnit } = await getMonthlySummary();
+      const inDollars = displayUnit === 'dollars';
 
       // Tier amounts are the monthly credits included in each plan.
       const TIERS: (vscode.QuickPickItem & { credits?: number })[] = [
@@ -85,9 +86,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       });
       if (!pick) return;
 
-      let credits: number;
+      let budgetUsd: number;
       if (pick.credits != null) {
-        credits = pick.credits;
+        budgetUsd = pick.credits / CREDITS_PER_USD;
+      } else if (inDollars) {
+        const capStr = await vscode.window.showInputBox({
+          prompt: 'Monthly budget (USD)',
+          value: monthlyBudgetUsd != null ? monthlyBudgetUsd.toFixed(2) : '',
+          validateInput: (v) => {
+            const n = Number(v);
+            return !Number.isFinite(n) || n <= 0 ? 'Enter a positive dollar amount' : null;
+          },
+        });
+        if (capStr === undefined) return;
+        budgetUsd = Number(capStr);
       } else {
         const capStr = await vscode.window.showInputBox({
           prompt: 'Monthly budget (credits)',
@@ -98,14 +110,62 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           },
         });
         if (capStr === undefined) return;
-        credits = Number(capStr);
+        budgetUsd = Number(capStr) / CREDITS_PER_USD;
       }
 
       const current = await loadConfig();
-      current.monthlyBudgetUsd = credits / CREDITS_PER_USD;
+      current.monthlyBudgetUsd = budgetUsd;
       await saveConfig(current);
       refreshAll();
-      vscode.window.showInformationMessage(`Monthly budget set to ${credits.toLocaleString()} credits.`);
+      const summary = inDollars
+        ? `$${budgetUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        : `${usdToCredits(budgetUsd).toLocaleString()} credits`;
+      vscode.window.showInformationMessage(`Monthly budget set to ${summary}.`);
+    }),
+
+    vscode.commands.registerCommand('tokenyst.toggleUnit', async () => {
+      const current = await loadConfig();
+      const next = (current.displayUnit ?? 'credits') === 'credits' ? 'dollars' : 'credits';
+      current.displayUnit = next;
+      await saveConfig(current);
+      refreshAll();
+      vscode.window.showInformationMessage(
+        `Tokenyst: now showing amounts in ${next === 'dollars' ? 'dollars (USD)' : 'credits'}.`,
+      );
+    }),
+
+    vscode.commands.registerCommand('tokenyst.toggleStatusBarMetric', async () => {
+      const current = await loadConfig();
+      current.statusBarMetric = (current.statusBarMetric ?? 'period') === 'period' ? 'today' : 'period';
+      await saveConfig(current);
+      refreshAll();
+    }),
+
+    vscode.commands.registerCommand('tokenyst.showMenu', async () => {
+      const cfg = await loadConfig();
+      const enabled = cfg.copilot?.enabled ?? false;
+      const inDollars = (cfg.displayUnit ?? 'credits') === 'dollars';
+
+      const items: (vscode.QuickPickItem & { command: string })[] = [
+        enabled
+          ? { label: '$(debug-pause) Disable Copilot Tracking', command: 'tokenyst.disableTracking' }
+          : { label: '$(play) Enable Copilot Tracking', command: 'tokenyst.enableTracking' },
+        { label: '$(add) Add Manual Allocation', command: 'tokenyst.addAllocation' },
+        { label: '$(trash) Remove Manual Allocation', command: 'tokenyst.deleteAllocation' },
+        {
+          label: inDollars ? '$(credit-card) Show amounts in credits' : '$(credit-card) Show amounts in dollars',
+          command: 'tokenyst.toggleUnit',
+        },
+        { label: '$(dashboard) Set Monthly Budget', command: 'tokenyst.setMonthlyBudget' },
+        { label: '$(calendar) Set Renewal Date', command: 'tokenyst.setRenewalDate' },
+        { label: '$(refresh) Refresh', command: 'tokenyst.refresh' },
+      ];
+
+      const pick = await vscode.window.showQuickPick(items, {
+        title: 'Tokenyst Options',
+        placeHolder: 'Choose an action',
+      });
+      if (pick) await vscode.commands.executeCommand(pick.command);
     }),
 
     vscode.commands.registerCommand('tokenyst.setRenewalDate', async () => {
@@ -192,19 +252,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
 
     vscode.commands.registerCommand('tokenyst.addAllocation', async () => {
-      // Get the amount in credits
-      const creditsStr = await vscode.window.showInputBox({
+      const { displayUnit } = await getMonthlySummary();
+      const inDollars = displayUnit === 'dollars';
+
+      // Get the amount in the active display unit
+      const amountStr = await vscode.window.showInputBox({
         title: 'Add Allocation',
-        prompt: 'Amount used (in credits)',
+        prompt: inDollars ? 'Amount used (in USD)' : 'Amount used (in credits)',
         validateInput: (v) => {
           const n = Number(v);
-          return !Number.isFinite(n) || n <= 0 ? 'Enter a positive number of credits' : null;
+          return !Number.isFinite(n) || n <= 0
+            ? `Enter a positive ${inDollars ? 'dollar amount' : 'number of credits'}`
+            : null;
         },
       });
-      if (creditsStr === undefined) return;
+      if (amountStr === undefined) return;
 
-      const credits = Number(creditsStr);
-      const costUsd = credits / CREDITS_PER_USD;
+      const amount = Number(amountStr);
+      const costUsd = inDollars ? amount : amount / CREDITS_PER_USD;
 
       // Get the model name
       const model = await vscode.window.showInputBox({
@@ -238,9 +303,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       current.allocations.push(allocation);
       await saveConfig(current);
       refreshAll();
-      const creditsNum = costUsd * CREDITS_PER_USD;
+      const amountLabel = inDollars
+        ? `$${costUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        : `${(costUsd * CREDITS_PER_USD).toLocaleString(undefined, { maximumFractionDigits: 1 })} credits`;
       vscode.window.showInformationMessage(
-        `Added allocation: ${creditsNum.toLocaleString(undefined, { maximumFractionDigits: 1 })} credits (${model || 'unknown'})`,
+        `Added allocation: ${amountLabel} (${model || 'unknown'})`,
       );
     }),
 
