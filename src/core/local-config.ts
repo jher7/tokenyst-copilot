@@ -1,6 +1,7 @@
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs/promises';
+import * as crypto from 'crypto';
 import type { SessionResult, ProviderId } from './types';
 
 export interface CopilotConfig {
@@ -83,41 +84,114 @@ function normalizeAllocation(a: unknown): LocalAllocation {
   };
 }
 
+/** Parse raw config text into a LocalConfig, applying the legacy-format migration. */
+function parseConfig(raw: string): LocalConfig {
+  const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+  // Migrate from old budget-based format: flatten all budget allocations
+  let allocations: LocalAllocation[];
+  if (Array.isArray(parsed['allocations'])) {
+    allocations = (parsed['allocations'] as unknown[]).map(normalizeAllocation);
+  } else if (Array.isArray(parsed['budgets'])) {
+    allocations = (parsed['budgets'] as unknown[]).flatMap((b) => {
+      const budget = b as Record<string, unknown>;
+      return Array.isArray(budget['allocations'])
+        ? (budget['allocations'] as unknown[]).map(normalizeAllocation)
+        : [];
+    });
+  } else {
+    allocations = [];
+  }
+
+  return {
+    ...DEFAULT_CONFIG,
+    ...(parsed as Partial<LocalConfig>),
+    allocations,
+  };
+}
+
+/**
+ * Load config. A missing file means a genuinely fresh install (returns defaults). But a
+ * file that exists yet fails to parse must NOT silently fall back to defaults — that would
+ * drop the `copilot` block and disable tracking. Such a read is almost always a transient
+ * torn read from a concurrent write, so retry once; if it still fails, the file is truly
+ * corrupt — back it up and throw so callers skip their save and the bad file isn't
+ * overwritten by a stale/empty config.
+ */
 export async function loadConfig(): Promise<LocalConfig> {
+  let raw: string;
   try {
-    const raw = await fs.readFile(getConfigPath(), 'utf8');
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-
-    // Migrate from old budget-based format: flatten all budget allocations
-    let allocations: LocalAllocation[];
-    if (Array.isArray(parsed['allocations'])) {
-      allocations = (parsed['allocations'] as unknown[]).map(normalizeAllocation);
-    } else if (Array.isArray(parsed['budgets'])) {
-      allocations = (parsed['budgets'] as unknown[]).flatMap((b) => {
-        const budget = b as Record<string, unknown>;
-        return Array.isArray(budget['allocations'])
-          ? (budget['allocations'] as unknown[]).map(normalizeAllocation)
-          : [];
-      });
-    } else {
-      allocations = [];
+    raw = await fs.readFile(getConfigPath(), 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      // Fresh allocations array — never hand back the shared DEFAULT_CONFIG.allocations,
+      // or callers that push before the first save would mutate module-level state.
+      return { ...DEFAULT_CONFIG, allocations: [] };
     }
+    throw err;
+  }
 
-    return {
-      ...DEFAULT_CONFIG,
-      ...(parsed as Partial<LocalConfig>),
-      allocations,
-    };
+  try {
+    return parseConfig(raw);
   } catch {
-    // Fresh allocations array — never hand back the shared DEFAULT_CONFIG.allocations,
-    // or callers that push before the first save would mutate module-level state.
-    return { ...DEFAULT_CONFIG, allocations: [] };
+    // Possible torn read — retry once after a brief pause to let the writer finish.
+    await new Promise((r) => setTimeout(r, 50));
+    try {
+      return parseConfig(await fs.readFile(getConfigPath(), 'utf8'));
+    } catch (err) {
+      // Truly corrupt (not a transient torn read). Move the bad file aside rather than
+      // copy it: this preserves the data for inspection AND clears config.json so the
+      // NEXT load sees ENOENT and recovers with defaults — otherwise the extension stays
+      // wedged, re-throwing and spawning a new backup on every read. We still throw once
+      // so the failure surfaces loudly instead of silently dropping tracking state.
+      const backup = `${getConfigPath()}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+      await fs.rename(getConfigPath(), backup).catch(() => {});
+      throw new Error(
+        `tokenyst: config.json was unreadable and has been moved to ${backup}; ` +
+        `re-enable tracking to continue. ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 }
 
 export async function saveConfig(cfg: LocalConfig): Promise<void> {
   await fs.mkdir(getConfigDir(), { recursive: true });
-  await fs.writeFile(getConfigPath(), JSON.stringify(cfg, null, 2), 'utf8');
+  // Atomic write: write to a unique temp file in the same dir, then rename over the
+  // target. rename() is atomic on a single volume and replaces the destination, so a
+  // concurrent reader never observes a half-written file.
+  const tmp = `${getConfigPath()}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
+  try {
+    await fs.writeFile(tmp, JSON.stringify(cfg, null, 2), 'utf8');
+    await fs.rename(tmp, getConfigPath());
+  } catch (err) {
+    await fs.unlink(tmp).catch(() => {});
+    throw err;
+  }
+}
+
+// In-process write serialization. The interval sync, both file watchers, and the
+// per-allocation import loop all do load→mutate→save on config.json; without a lock they
+// interleave and lose updates (or, combined with the old non-atomic save, dropped the
+// `copilot` block entirely). This promise chain runs each mutation to completion before
+// the next starts. It's process-local — atomic saves + the hardened loadConfig above are
+// what keep cross-window writes from disabling tracking.
+let writeChain: Promise<unknown> = Promise.resolve();
+
+/**
+ * Run a load→mutate→save cycle under the in-process write lock. The callback receives the
+ * freshly loaded config and mutates it in place (its return value is passed through). If
+ * loadConfig throws (corrupt file), the save is skipped and the on-disk file is preserved.
+ */
+export async function mutateConfig<T>(fn: (cfg: LocalConfig) => T | Promise<T>): Promise<T> {
+  const run = writeChain.then(async () => {
+    const cfg = await loadConfig();
+    const result = await fn(cfg);
+    await saveConfig(cfg);
+    return result;
+  });
+  // Keep the chain alive after a failure so one bad mutation doesn't wedge all later ones.
+  writeChain = run.catch(() => {});
+  return run;
 }
 
 type DedupEntry = string | { timestamp: string; pctUsed?: string };
@@ -168,41 +242,41 @@ export async function getRecordedPct(transcriptPath: string): Promise<string | u
 export async function recordLocalAllocation(
   session: SessionResult,
 ): Promise<{ success: boolean; deduped?: boolean; error?: string }> {
-  const cfg = await loadConfig();
-  const provider = session.provider ?? 'claude';
-  const now = Date.now();
+  return mutateConfig((cfg) => {
+    const provider = session.provider ?? 'claude';
+    const now = Date.now();
 
-  const dup = cfg.allocations.find(a => {
-    if (session.externalId && a.externalId === session.externalId) return true;
-    return (
-      a.provider === provider &&
-      a.model === session.model &&
-      a.inputTokens === session.inputTokens &&
-      a.outputTokens === session.outputTokens &&
-      a.cacheCreationTokens === session.cacheCreationTokens &&
-      a.cacheReadTokens === session.cacheReadTokens &&
-      a.costUsd === session.costUsd &&
-      now - new Date(a.at).getTime() < 60_000
-    );
+    const dup = cfg.allocations.find(a => {
+      if (session.externalId && a.externalId === session.externalId) return true;
+      return (
+        a.provider === provider &&
+        a.model === session.model &&
+        a.inputTokens === session.inputTokens &&
+        a.outputTokens === session.outputTokens &&
+        a.cacheCreationTokens === session.cacheCreationTokens &&
+        a.cacheReadTokens === session.cacheReadTokens &&
+        a.costUsd === session.costUsd &&
+        now - new Date(a.at).getTime() < 60_000
+      );
+    });
+    if (dup) return { success: true, deduped: true };
+
+    cfg.allocations.push({
+      costUsd: session.costUsd,
+      model: session.model,
+      inputTokens: session.inputTokens,
+      outputTokens: session.outputTokens,
+      cacheCreationTokens: session.cacheCreationTokens,
+      cacheReadTokens: session.cacheReadTokens,
+      filesModified: session.filesModified,
+      at: session.at ?? new Date().toISOString(),
+      provider,
+      externalId: session.externalId,
+      repo: session.repo,
+    });
+
+    return { success: true };
   });
-  if (dup) return { success: true, deduped: true };
-
-  cfg.allocations.push({
-    costUsd: session.costUsd,
-    model: session.model,
-    inputTokens: session.inputTokens,
-    outputTokens: session.outputTokens,
-    cacheCreationTokens: session.cacheCreationTokens,
-    cacheReadTokens: session.cacheReadTokens,
-    filesModified: session.filesModified,
-    at: session.at ?? new Date().toISOString(),
-    provider,
-    externalId: session.externalId,
-    repo: session.repo,
-  });
-
-  await saveConfig(cfg);
-  return { success: true };
 }
 
 /**
@@ -214,40 +288,39 @@ export async function recordLocalAllocation(
 export async function upsertCopilotSessionAllocation(
   session: SessionResult,
 ): Promise<{ success: boolean; inserted: boolean }> {
-  const cfg = await loadConfig();
-  const existing = session.externalId
-    ? cfg.allocations.find(a => a.externalId === session.externalId)
-    : undefined;
+  return mutateConfig((cfg) => {
+    const existing = session.externalId
+      ? cfg.allocations.find(a => a.externalId === session.externalId)
+      : undefined;
 
-  if (existing) {
-    existing.costUsd = session.costUsd;
-    existing.model = session.model;
-    existing.inputTokens = session.inputTokens;
-    existing.outputTokens = session.outputTokens;
-    existing.cacheCreationTokens = session.cacheCreationTokens;
-    existing.cacheReadTokens = session.cacheReadTokens;
-    existing.filesModified = session.filesModified;
-    existing.repo = session.repo;
-    if (session.at) existing.at = session.at;
-    await saveConfig(cfg);
-    return { success: true, inserted: false };
-  }
+    if (existing) {
+      existing.costUsd = session.costUsd;
+      existing.model = session.model;
+      existing.inputTokens = session.inputTokens;
+      existing.outputTokens = session.outputTokens;
+      existing.cacheCreationTokens = session.cacheCreationTokens;
+      existing.cacheReadTokens = session.cacheReadTokens;
+      existing.filesModified = session.filesModified;
+      existing.repo = session.repo;
+      if (session.at) existing.at = session.at;
+      return { success: true, inserted: false };
+    }
 
-  cfg.allocations.push({
-    costUsd: session.costUsd,
-    model: session.model,
-    inputTokens: session.inputTokens,
-    outputTokens: session.outputTokens,
-    cacheCreationTokens: session.cacheCreationTokens,
-    cacheReadTokens: session.cacheReadTokens,
-    filesModified: session.filesModified,
-    at: session.at ?? new Date().toISOString(),
-    provider: session.provider ?? 'copilot',
-    externalId: session.externalId,
-    repo: session.repo,
+    cfg.allocations.push({
+      costUsd: session.costUsd,
+      model: session.model,
+      inputTokens: session.inputTokens,
+      outputTokens: session.outputTokens,
+      cacheCreationTokens: session.cacheCreationTokens,
+      cacheReadTokens: session.cacheReadTokens,
+      filesModified: session.filesModified,
+      at: session.at ?? new Date().toISOString(),
+      provider: session.provider ?? 'copilot',
+      externalId: session.externalId,
+      repo: session.repo,
+    });
+    return { success: true, inserted: true };
   });
-  await saveConfig(cfg);
-  return { success: true, inserted: true };
 }
 
 /**

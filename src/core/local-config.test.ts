@@ -14,7 +14,16 @@ vi.mock('os', async (importOriginal) => {
   return { ...actual, homedir: () => holder.home };
 });
 
-import { recordLocalAllocation, loadConfig, getCurrentPeriod } from './local-config';
+import {
+  recordLocalAllocation,
+  loadConfig,
+  saveConfig,
+  mutateConfig,
+  upsertCopilotSessionAllocation,
+  getCurrentPeriod,
+  getConfigPath,
+  type LocalConfig,
+} from './local-config';
 
 describe('getCurrentPeriod', () => {
   const ymd = (d: Date) => [d.getFullYear(), d.getMonth(), d.getDate()];
@@ -129,5 +138,91 @@ describe('recordLocalAllocation', () => {
 
     const cfg = await loadConfig();
     expect(cfg.allocations).toHaveLength(1);
+  });
+});
+
+describe('concurrent config writes do not disable tracking', () => {
+  beforeEach(async () => {
+    holder.home = await fs.mkdtemp(path.join(os.tmpdir(), 'tokenyst-test-'));
+    // Seed an enabled-tracking config, like enableTracking would.
+    const seed: LocalConfig = {
+      allocations: [],
+      enabled: true,
+      copilot: { enabled: true, lastSeenEventsAt: new Date().toISOString() },
+    };
+    await saveConfig(seed);
+  });
+
+  afterEach(async () => {
+    await fs.rm(holder.home, { recursive: true, force: true });
+  });
+
+  it('keeps copilot.enabled and all allocations under a burst of concurrent writers', async () => {
+    // Mirror the import loop (many per-allocation upserts) racing the watermark write.
+    const upserts = Array.from({ length: 25 }, (_, i) =>
+      upsertCopilotSessionAllocation({
+        costUsd: 0.1,
+        model: 'copilot-gpt-4o',
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        filesModified: [],
+        provider: 'copilot',
+        externalId: `copilot-chat-s${i}-gpt-4o`,
+        at: '2026-05-01T08:00:00.000Z',
+      }),
+    );
+    const watermarks = Array.from({ length: 10 }, () =>
+      mutateConfig((cfg) => {
+        if (cfg.copilot) cfg.copilot.lastSeenEventsAt = new Date().toISOString();
+      }),
+    );
+    await Promise.all([...upserts, ...watermarks]);
+
+    const cfg = await loadConfig();
+    expect(cfg.copilot?.enabled).toBe(true);
+    expect(cfg.allocations).toHaveLength(25);
+  });
+});
+
+describe('loadConfig with a corrupt file', () => {
+  beforeEach(async () => {
+    holder.home = await fs.mkdtemp(path.join(os.tmpdir(), 'tokenyst-test-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(holder.home, { recursive: true, force: true });
+  });
+
+  it('throws and moves the file aside instead of falling back to a copilot-less default', async () => {
+    const configDir = path.dirname(getConfigPath());
+    await fs.mkdir(configDir, { recursive: true });
+    // Truncated JSON — what a torn read of a half-written file looks like.
+    await fs.writeFile(getConfigPath(), '{ "allocations": [], "copilot": { "enab', 'utf8');
+
+    await expect(loadConfig()).rejects.toThrow(/unreadable/);
+
+    const files = await fs.readdir(configDir);
+    expect(files.some((f) => f.startsWith('config.json.corrupt-'))).toBe(true);
+    // The corrupt file is moved aside, not copied — config.json is gone.
+    expect(files).not.toContain('config.json');
+  });
+
+  it('self-heals on the next load after a corrupt file is moved aside', async () => {
+    const configDir = path.dirname(getConfigPath());
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.writeFile(getConfigPath(), '{ "allocations": [], "copilot": { "enab', 'utf8');
+
+    await expect(loadConfig()).rejects.toThrow();
+    // Next read no longer throws — file was moved aside, so this is treated as fresh.
+    const cfg = await loadConfig();
+    expect(cfg.allocations).toEqual([]);
+  });
+
+  it('returns defaults when the file is genuinely missing (fresh install)', async () => {
+    const cfg = await loadConfig();
+    expect(cfg.allocations).toEqual([]);
+    expect(cfg.copilot).toBeUndefined();
   });
 });
