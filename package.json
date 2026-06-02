@@ -100,6 +100,11 @@
         "command": "tokenyst.showMenu",
         "title": "Show Options Menu",
         "category": "Tokenyst"
+      },
+      {
+        "command": "tokenyst.toggleStatusBarMetric",
+        "title": "Toggle Status Bar Metric (Today/This Period)",
+        "category": "Tokenyst"
       }
     ],
     "menus": {

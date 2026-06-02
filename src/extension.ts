@@ -134,6 +134,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
     }),
 
+    vscode.commands.registerCommand('tokenyst.toggleStatusBarMetric', async () => {
+      const current = await loadConfig();
+      current.statusBarMetric = (current.statusBarMetric ?? 'period') === 'period' ? 'today' : 'period';
+      await saveConfig(current);
+      refreshAll();
+    }),
+
     vscode.commands.registerCommand('tokenyst.showMenu', async () => {
       const cfg = await loadConfig();
       const enabled = cfg.copilot?.enabled ?? false;
