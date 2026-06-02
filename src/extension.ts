@@ -1,24 +1,32 @@
 import * as vscode from 'vscode';
 import * as os from 'os';
 import * as path from 'path';
-import { loadConfig, saveConfig, getMonthlySummary, deleteManualAllocation, isManualAllocation, backfillManualExternalIds } from './core/local-config';
+import * as fs from 'fs/promises';
+import { loadConfig, saveConfig, getMonthlySummary, deleteManualAllocation, isManualAllocation, backfillManualExternalIds, getConfigDir } from './core/local-config';
 import { CREDITS_PER_USD, usdToCredits } from './core/pricing';
 import { AnalyticsWebviewProvider } from './ui/AnalyticsWebviewProvider';
 import { StatusBarManager } from './ui/StatusBarItem';
 import { syncNow, importHistory, hasImportableHistory } from './bootstrap';
-import { findChatSessionFiles, getVSCodeUserDir } from './ingestion/chat-parser';
+import { findChatSessionFiles, getVSCodeUserDir, setVSCodeUserDir } from './ingestion/chat-parser';
 
 let syncInterval: ReturnType<typeof setInterval> | undefined;
 
-// Historical import is fixed to the last 30 days.
+// Default window for the enable-tracking auto-offer. The explicit "Import Historical
+// Usage" command lets the user pick 30/90 days or all available history.
 const IMPORT_WINDOW_DAYS = 30;
 
-/** ISO timestamp marking the start of the import window (last 30 days). */
-function importSince(): string {
-  return new Date(Date.now() - IMPORT_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+/** ISO timestamp `days` ago, or null for "all available" (no lower bound). */
+function sinceIso(days: number | null): string | null {
+  return days == null ? null : new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  // Resolve the running VS Code build's `User` directory from globalStorageUri
+  // (`<User>/globalStorage/<ext-id>`), so Copilot sessions are read from the correct
+  // build — Stable, Insiders, portable, or OSS. Must run before the session-file
+  // watcher and any sync, which both resolve via getVSCodeUserDir().
+  setVSCodeUserDir(path.dirname(path.dirname(context.globalStorageUri.fsPath)));
+
   const analyticsProvider = new AnalyticsWebviewProvider();
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider('tokenyst.analytics', analyticsProvider),
@@ -33,8 +41,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     statusBar.refresh().catch(() => {});
   }
 
-  // Backfill the last 30 days of historical usage, then refresh.
-  async function runImport(): Promise<void> {
+  // Backfill historical usage within the given window (`since` = null imports all
+  // available), then refresh. `label` describes the window for progress/result text.
+  async function runImport(since: string | null, label: string): Promise<void> {
     if (findChatSessionFiles().length === 0) {
       vscode.window.showWarningMessage(
         'No Copilot Chat session files found. Use Copilot Chat in VS Code first, then try again.',
@@ -42,14 +51,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return;
     }
     const count = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: 'Tokenyst: importing the last 30 days…', cancellable: false },
-      async () => importHistory(importSince()),
+      { location: vscode.ProgressLocation.Notification, title: `Tokenyst: importing ${label}…`, cancellable: false },
+      async () => importHistory(since),
     );
     refreshAll();
     vscode.window.showInformationMessage(
       count > 0
-        ? `Imported ${count} Copilot session(s) from the last 30 days.`
-        : 'No usage found in the last 30 days to import.',
+        ? `Imported ${count} Copilot session(s) from ${label}.`
+        : `No usage found in ${label} to import.`,
     );
   }
 
@@ -158,7 +167,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         },
         { label: '$(dashboard) Set Monthly Budget', command: 'tokenyst.setMonthlyBudget' },
         { label: '$(calendar) Set Renewal Date', command: 'tokenyst.setRenewalDate' },
-        { label: '$(refresh) Refresh', command: 'tokenyst.refresh' },
+        { label: '$(cloud-download) Import Historical Usage…', command: 'tokenyst.importHistory' },
+        { label: '$(refresh) Sync new usage', command: 'tokenyst.refresh' },
+        { label: '$(trash) Reset All Data…', command: 'tokenyst.resetData' },
       ];
 
       const pick = await vscode.window.showQuickPick(items, {
@@ -166,6 +177,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         placeHolder: 'Choose an action',
       });
       if (pick) await vscode.commands.executeCommand(pick.command);
+    }),
+
+    vscode.commands.registerCommand('tokenyst.resetData', async () => {
+      const choice = await vscode.window.showWarningMessage(
+        'Reset Tokenyst? This deletes all tracked usage, budget, and settings (~/.tokenyst) and disables tracking. This cannot be undone.',
+        { modal: true },
+        'Yes',
+      );
+      if (choice !== 'Yes') return;
+      try {
+        await fs.rm(getConfigDir(), { recursive: true, force: true });
+      } catch (err) {
+        vscode.window.showErrorMessage(
+          `Tokenyst: failed to reset data — ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return;
+      }
+      refreshAll();
+      vscode.window.showInformationMessage('Tokenyst data reset. Tracking disabled.');
     }),
 
     vscode.commands.registerCommand('tokenyst.setRenewalDate', async () => {
@@ -212,16 +242,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       // Offer to backfill usage from the last 30 days that predates the watermark
       // we just set. The watermark is "now", so anything on disk is earlier usage.
-      if (hasImportableHistory(importSince())) {
+      if (hasImportableHistory(sinceIso(IMPORT_WINDOW_DAYS))) {
         const choice = await vscode.window.showInformationMessage(
           'Found Copilot usage from the last 30 days. Import it so your stats reflect this period?',
           'Import', 'Skip',
         );
-        if (choice === 'Import') await runImport();
+        if (choice === 'Import') await runImport(sinceIso(IMPORT_WINDOW_DAYS), 'the last 30 days');
       }
     }),
 
-    vscode.commands.registerCommand('tokenyst.importHistory', runImport),
+    vscode.commands.registerCommand('tokenyst.importHistory', async () => {
+      const choices: (vscode.QuickPickItem & { days: number | null; windowLabel: string })[] = [
+        { label: 'Last 30 days', days: 30, windowLabel: 'the last 30 days' },
+        { label: 'Last 90 days', days: 90, windowLabel: 'the last 90 days' },
+        {
+          label: 'All available',
+          description: 'every session still on disk',
+          detail: 'Older sessions may be missing, undated (counted as today), or lack usage data and be skipped.',
+          days: null,
+          windowLabel: 'all available history',
+        },
+      ];
+      const pick = await vscode.window.showQuickPick(choices, {
+        title: 'Import Historical Usage',
+        placeHolder: 'How far back should Tokenyst scan?',
+      });
+      if (!pick) return;
+      await runImport(sinceIso(pick.days), pick.windowLabel);
+    }),
 
     vscode.commands.registerCommand('tokenyst.disableTracking', async () => {
       const current = await loadConfig();

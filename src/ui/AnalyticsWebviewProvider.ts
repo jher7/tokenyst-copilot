@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { loadConfig, getMonthlySummary } from '../core/local-config';
+import { loadConfig, getMonthlySummary, getCurrentPeriod } from '../core/local-config';
 import { CREDITS_PER_USD } from '../core/pricing';
 
 export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
@@ -43,6 +43,8 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     if (!this._view) return;
     const cfg = await loadConfig();
     const { monthlyBudgetUsd, monthlySpentUsd, renewalDay, periodStart, periodEnd, displayUnit } = await getMonthlySummary();
+    // Previous billing period: the one ending right where the current one starts.
+    const lastPeriod = getCurrentPeriod(renewalDay, new Date(Date.parse(periodStart) - 1));
     this._view.webview.postMessage({
       type: 'update',
       allocations: cfg.allocations,
@@ -52,6 +54,8 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       renewalDay,
       periodStart,
       periodEnd,
+      lastPeriodStart: lastPeriod.start.toISOString(),
+      lastPeriodEnd: lastPeriod.end.toISOString(),
       displayUnit,
     });
   }
@@ -263,6 +267,27 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       align-items: flex-start;
     }
 
+    /* Custom date-range inputs (shown under the filter when "Custom" is active) */
+    .custom-range {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 4px;
+    }
+    .custom-range-sep {
+      color: var(--vscode-descriptionForeground);
+      font-size: 10px;
+    }
+    .custom-date {
+      background: var(--vscode-input-background, #2a2a2a);
+      color: var(--vscode-input-foreground, var(--vscode-foreground));
+      border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.3));
+      border-radius: 3px;
+      font-family: inherit;
+      font-size: 10px;
+      padding: 1px 4px;
+    }
+
     /* Daily usage line chart */
     .usage-peak {
       float: right;
@@ -353,7 +378,9 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     /* Bar rows */
     .bar-row {
       display: grid;
-      grid-template-columns: 72px 1fr 64px;
+      /* Cap the bar track so it doesn't span the full panel; the value column
+         (1fr, right-aligned) absorbs the remaining width and stays at the edge. */
+      grid-template-columns: 72px minmax(0, 170px) 1fr;
       align-items: center;
       gap: 6px;
       margin-bottom: 5px;
@@ -476,16 +503,35 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
 
     // UI preferences persisted across panel reloads (VS Code tears the webview
     // down when the sidebar is hidden). Restored from getState() on load.
+    // breakdownWindow: 'month' (this period) | 'last' (last period) | 0 (all time) | 'custom'.
     const persisted = vscode.getState() || {};
     let breakdownWindow = persisted.breakdownWindow ?? 0;
     let budgetOpen = persisted.budgetOpen ?? true;
     let breakdownOpen = persisted.breakdownOpen ?? false;
+    // Custom range bounds (ms), local day boundaries. Null until the user sets them.
+    let customStartMs = persisted.customStartMs ?? null;
+    let customEndMs = persisted.customEndMs ?? null;
     function saveUiState() {
-      vscode.setState({ breakdownWindow, budgetOpen, breakdownOpen });
+      vscode.setState({ breakdownWindow, budgetOpen, breakdownOpen, customStartMs, customEndMs });
     }
     // Billing-period boundaries (ms), supplied by the extension host. Null until first update.
     let periodStartMs = null;
     let periodEndMs = null;
+    let lastPeriodStartMs = null;
+    let lastPeriodEndMs = null;
+
+    // <input type="date"> uses local "YYYY-MM-DD". Convert to/from a ms boundary.
+    function pad2(n) { return String(n).padStart(2, '0'); }
+    function msToDateInput(ms) {
+      const d = new Date(ms);
+      return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+    }
+    function dateInputToMs(str, endOfDay) {
+      const [y, m, d] = str.split('-').map(Number);
+      return endOfDay
+        ? new Date(y, m - 1, d, 23, 59, 59, 999).getTime()
+        : new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
+    }
 
     const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -544,22 +590,39 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       return fullWeeks + extra || 1;
     }
 
-    function compute(allocations, wDays) {
-      let cutoff;
-      let fixedElapsedDays = null;
-      if (wDays === 'month') {
-        if (periodStartMs != null) {
-          cutoff = periodStartMs;
-        } else {
-          const monthStart = new Date();
-          monthStart.setDate(1);
-          monthStart.setHours(0, 0, 0, 0);
-          cutoff = monthStart.getTime();
+    // Resolve a window selector to a date range. Returns inclusive-start /
+    // exclusive-end ms bounds, the last day to draw on the chart axis, and a
+    // fixed elapsed-day count for fixed-length windows (null = derive from data).
+    function resolveRange(win) {
+      if (win === 'month') {
+        let start = periodStartMs;
+        if (start == null) {
+          const m = new Date(); m.setDate(1); m.setHours(0, 0, 0, 0); start = m.getTime();
         }
-        fixedElapsedDays = Math.max(1, (Date.now() - cutoff) / 86400000);
-      } else {
-        cutoff = 0;
+        const end = periodEndMs != null ? periodEndMs : Infinity;
+        return { startMs: start, endMs: end, axisEndMs: Date.now(), elapsedDays: Math.max(1, (Date.now() - start) / 86400000) };
       }
+      if (win === 'last') {
+        if (lastPeriodStartMs == null || lastPeriodEndMs == null) return { startMs: null };
+        return {
+          startMs: lastPeriodStartMs, endMs: lastPeriodEndMs, axisEndMs: lastPeriodEndMs - 1,
+          elapsedDays: Math.max(1, (lastPeriodEndMs - lastPeriodStartMs) / 86400000),
+        };
+      }
+      if (win === 'custom') {
+        if (customStartMs == null || customEndMs == null) return { startMs: null };
+        const end = customEndMs + 1; // customEndMs is end-of-day inclusive
+        return {
+          startMs: customStartMs, endMs: end, axisEndMs: Math.min(customEndMs, Date.now()),
+          elapsedDays: Math.max(1, (Math.min(end, Date.now()) - customStartMs) / 86400000),
+        };
+      }
+      // all time
+      return { startMs: 0, endMs: Infinity, axisEndMs: Date.now(), elapsedDays: null };
+    }
+
+    function compute(allocations, win) {
+      const range = resolveRange(win);
 
       // Today / this week — always absolute, independent of window toggle
       const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
@@ -573,15 +636,17 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         if (t >= weekStart.getTime()) thisWeekSpent += a.costUsd;
       }
 
+      // Window bounds unavailable yet (e.g. last/custom before they're set).
+      if (range.startMs == null) return { todaySpent, thisWeekSpent, empty: true };
+
       const allocs = (allocations || []).filter(
-        a => a.provider === 'copilot' && Date.parse(a.at) >= cutoff
+        a => a.provider === 'copilot' && Date.parse(a.at) >= range.startMs && Date.parse(a.at) < range.endMs
       );
 
       if (allocs.length === 0) return { todaySpent, thisWeekSpent, empty: true };
 
       const totalSpent = allocs.reduce((s, a) => s + a.costUsd, 0);
-      const span = spanDays(allocs);
-      const days = fixedElapsedDays ?? span;
+      const days = range.elapsedDays ?? spanDays(allocs);
       const weeks = Math.max(1, days / 7);
 
       // KPIs
@@ -619,14 +684,10 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         .sort((a, b) => b.value - a.value);
 
       // Daily series for the line chart: contiguous, zero-filled days from the
-      // window start to today.
+      // window start to its axis end. All time starts at the earliest allocation.
       const dayKey = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
-      let axisStartMs;
-      if (wDays === 'month') {
-        axisStartMs = periodStartMs != null ? periodStartMs : cutoff;
-      } else {
-        axisStartMs = Math.min(...allocs.map(a => Date.parse(a.at)));
-      }
+      const axisStartMs = win === 0 ? Math.min(...allocs.map(a => Date.parse(a.at))) : range.startMs;
+      const axisEndKey = dayKey(range.axisEndMs);
       const dayMap = {};
       for (const a of allocs) {
         const k = dayKey(Date.parse(a.at));
@@ -634,9 +695,8 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       }
       const daily = [];
       const cur = new Date(axisStartMs); cur.setHours(0, 0, 0, 0);
-      const todayKey = dayKey(Date.now());
       let guard = 0;
-      while (cur.getTime() <= todayKey && guard++ < 1000) {
+      while (cur.getTime() <= axisEndKey && guard++ < 4000) {
         const k = cur.getTime();
         daily.push({ t: k, value: dayMap[k] || 0 });
         cur.setDate(cur.getDate() + 1);
@@ -903,6 +963,8 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       displayUnit = data.displayUnit === 'dollars' ? 'dollars' : 'credits';
       periodStartMs = data.periodStart ? Date.parse(data.periodStart) : null;
       periodEndMs = data.periodEnd ? Date.parse(data.periodEnd) : null;
+      lastPeriodStartMs = data.lastPeriodStart ? Date.parse(data.lastPeriodStart) : null;
+      lastPeriodEndMs = data.lastPeriodEnd ? Date.parse(data.lastPeriodEnd) : null;
 
       const renewalSub = renewalDay != null
         ? \`<span class="pace-sub"><span class="edit-label" data-action="setRenewalDate" title="Edit reset date">Resets on the \${ordinal(renewalDay)}</span></span>\`
@@ -958,6 +1020,14 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
           if (periodStartMs == null) return '';
           startMs = periodStartMs;
           endMs = periodEndMs ?? Date.now();
+        } else if (win === 'last') {
+          if (lastPeriodStartMs == null) return '';
+          startMs = lastPeriodStartMs;
+          endMs = lastPeriodEndMs;
+        } else if (win === 'custom') {
+          if (customStartMs == null || customEndMs == null) return '';
+          startMs = customStartMs;
+          endMs = customEndMs;
         } else {
           const times = (allocations || [])
             .filter(a => a.provider === 'copilot')
@@ -969,15 +1039,22 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         return fmtMDY(new Date(startMs)) + ' – ' + fmtMDY(new Date(endMs));
       }
 
-      function filterSelect(which, value) {
-        const range = rangeLabel(value);
+      // Option list for the breakdown window <select>, marking the active one.
+      function windowOptions(value) {
+        const opt = (v, label) => \`<option value="\${v}" \${String(value) === v ? 'selected' : ''}>\${label}</option>\`;
+        return opt('month', 'This period') + opt('last', 'Last period') + opt('0', 'All time') + opt('custom', 'Custom…');
+      }
+
+      // Two date inputs shown only when the custom window is active.
+      function customRangeHtml() {
+        if (breakdownWindow !== 'custom') return '';
+        const s = customStartMs != null ? msToDateInput(customStartMs) : '';
+        const e = customEndMs != null ? msToDateInput(customEndMs) : '';
         return \`
-          <div class="section-filter">
-            \${range ? \`<span class="filter-range">\${esc(range)}</span>\` : ''}
-            <select class="filter-select" data-filter="\${which}">
-              <option value="month" \${value === 'month' ? 'selected' : ''}>This period</option>
-              <option value="0" \${value === 0 ? 'selected' : ''}>All time</option>
-            </select>
+          <div class="custom-range">
+            <input type="date" class="custom-date" data-custom="start" value="\${s}" aria-label="Start date" />
+            <span class="custom-range-sep">–</span>
+            <input type="date" class="custom-date" data-custom="end" value="\${e}" aria-label="End date" />
           </div>
         \`;
       }
@@ -998,21 +1075,28 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       \`;
 
       const breakdownRange = rangeLabel(breakdownWindow);
-      const avgKpiHtml = statsBreak.empty ? '' : \`
+      // Single billing periods (this/last) have no meaningful monthly average.
+      const singlePeriod = breakdownWindow === 'month' || breakdownWindow === 'last';
+      // Filter row always renders (so the window can be changed even when the
+      // selected range has no data); Total spent shows a dash when empty.
+      const filterTopHtml = \`
         <div class="kpi-row kpi-row--top">
           <div class="kpi">
             <div class="kpi-label">Total spent</div>
-            <div class="kpi-value">\${esc(fmtCreditsNum(statsBreak.totalSpent))}</div>
-            <div class="kpi-sub">\${unitLabel()}</div>
+            <div class="kpi-value">\${statsBreak.empty ? '–' : esc(fmtCreditsNum(statsBreak.totalSpent))}</div>
+            <div class="kpi-sub">\${statsBreak.empty ? '&nbsp;' : unitLabel()}</div>
           </div>
           <div class="kpi-filter">
-            \${breakdownRange ? \`<span class="filter-range">\${esc(breakdownRange)}</span>\` : ''}
+            \${breakdownWindow === 'custom'
+              ? customRangeHtml()
+              : (breakdownRange ? \`<span class="filter-range">\${esc(breakdownRange)}</span>\` : '')}
             <select class="filter-select" data-filter="breakdown">
-              <option value="month" \${breakdownWindow === 'month' ? 'selected' : ''}>This period</option>
-              <option value="0" \${breakdownWindow === 0 ? 'selected' : ''}>All time</option>
+              \${windowOptions(breakdownWindow)}
             </select>
           </div>
         </div>
+      \`;
+      const avgKpiHtml = statsBreak.empty ? '' : \`
         <div class="kpi-row">
           <div class="kpi">
             <div class="kpi-label">Avg daily</div>
@@ -1026,8 +1110,8 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
           </div>
           <div class="kpi">
             <div class="kpi-label">Avg monthly</div>
-            <div class="kpi-value">\${breakdownWindow === 'month' ? '-' : esc(fmtCreditsNum(statsBreak.avgMonthly))}</div>
-            <div class="kpi-sub">\${breakdownWindow === 'month' ? '&nbsp;' : unitLabel()}</div>
+            <div class="kpi-value">\${singlePeriod ? '-' : esc(fmtCreditsNum(statsBreak.avgMonthly))}</div>
+            <div class="kpi-sub">\${singlePeriod ? '&nbsp;' : unitLabel()}</div>
           </div>
         </div>
       \`;
@@ -1059,7 +1143,8 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         \`;
       }
 
-      const breakdownHtml = statsBreak.empty ? '<div class="section-empty">No data for this period.</div>' : \`
+      const emptyMsg = breakdownWindow === 'custom' ? 'No data for this range.' : 'No data for this period.';
+      const breakdownHtml = statsBreak.empty ? \`<div class="section-empty">\${emptyMsg}</div>\` : \`
         \${renderUsageChart(statsBreak.daily)}
 
         <div class="chart-section">
@@ -1092,6 +1177,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       const breakdownSection = \`
         <details class="panel-section" data-section="breakdown" \${breakdownOpen ? 'open' : ''}>
           <summary>Breakdown</summary>
+          \${filterTopHtml}
           \${avgKpiHtml}
           \${breakdownHtml}
         </details>
@@ -1111,10 +1197,32 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
 
     root.addEventListener('change', e => {
       const sel = e.target.closest('.filter-select');
-      if (!sel) return;
-      breakdownWindow = sel.value === '0' ? 0 : sel.value;
-      saveUiState();
-      render(lastData);
+      if (sel) {
+        breakdownWindow = sel.value === '0' ? 0 : sel.value;
+        // Seed a sensible default range (last 30 days) the first time Custom is chosen.
+        if (breakdownWindow === 'custom' && (customStartMs == null || customEndMs == null)) {
+          const end = new Date(); end.setHours(23, 59, 59, 999);
+          const start = new Date(); start.setDate(start.getDate() - 29); start.setHours(0, 0, 0, 0);
+          customStartMs = start.getTime();
+          customEndMs = end.getTime();
+        }
+        saveUiState();
+        render(lastData);
+        return;
+      }
+
+      const dateInput = e.target.closest('.custom-date');
+      if (dateInput && dateInput.value) {
+        if (dateInput.dataset.custom === 'start') customStartMs = dateInputToMs(dateInput.value, false);
+        else customEndMs = dateInputToMs(dateInput.value, true);
+        // Keep start ≤ end by snapping the other bound to the edited day.
+        if (customStartMs != null && customEndMs != null && customStartMs > customEndMs) {
+          if (dateInput.dataset.custom === 'start') customEndMs = dateInputToMs(dateInput.value, true);
+          else customStartMs = dateInputToMs(dateInput.value, false);
+        }
+        saveUiState();
+        render(lastData);
+      }
     });
 
     // Persist section collapse state across re-renders. The 'toggle' event does

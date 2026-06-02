@@ -2,7 +2,7 @@
   "name": "tokenyst-copilot",
   "displayName": "Tokenyst",
   "description": "GitHub Copilot usage tracking for budget management",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "author": "Joshua Herrera",
   "publisher": "TokenystCopilot",
   "icon": "resources/icons/tokenyst-marketplace.png",
@@ -104,6 +104,11 @@
       {
         "command": "tokenyst.toggleStatusBarMetric",
         "title": "Toggle Status Bar Metric (Today/This Period)",
+        "category": "Tokenyst"
+      },
+      {
+        "command": "tokenyst.resetData",
+        "title": "Reset All Data",
         "category": "Tokenyst"
       }
     ],
