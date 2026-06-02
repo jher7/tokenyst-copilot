@@ -473,9 +473,16 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     const vscode = acquireVsCodeApi();
     const root = document.getElementById('root');
     let lastData = null;
-    let breakdownWindow = 0;
-    let budgetOpen = true;
-    let breakdownOpen = false;
+
+    // UI preferences persisted across panel reloads (VS Code tears the webview
+    // down when the sidebar is hidden). Restored from getState() on load.
+    const persisted = vscode.getState() || {};
+    let breakdownWindow = persisted.breakdownWindow ?? 0;
+    let budgetOpen = persisted.budgetOpen ?? true;
+    let breakdownOpen = persisted.breakdownOpen ?? false;
+    function saveUiState() {
+      vscode.setState({ breakdownWindow, budgetOpen, breakdownOpen });
+    }
     // Billing-period boundaries (ms), supplied by the extension host. Null until first update.
     let periodStartMs = null;
     let periodEndMs = null;
@@ -1106,6 +1113,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       const sel = e.target.closest('.filter-select');
       if (!sel) return;
       breakdownWindow = sel.value === '0' ? 0 : sel.value;
+      saveUiState();
       render(lastData);
     });
 
@@ -1116,6 +1124,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       if (!d) return;
       if (d.dataset.section === 'budget') budgetOpen = d.open;
       else if (d.dataset.section === 'breakdown') breakdownOpen = d.open;
+      saveUiState();
     }, true);
 
     root.addEventListener('click', e => {
