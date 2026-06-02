@@ -353,7 +353,9 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     /* Bar rows */
     .bar-row {
       display: grid;
-      grid-template-columns: 72px 1fr 64px;
+      /* Cap the bar track so it doesn't span the full panel; the value column
+         (1fr, right-aligned) absorbs the remaining width and stays at the edge. */
+      grid-template-columns: 72px minmax(0, 170px) 1fr;
       align-items: center;
       gap: 6px;
       margin-bottom: 5px;

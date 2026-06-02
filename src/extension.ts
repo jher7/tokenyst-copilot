@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import * as os from 'os';
 import * as path from 'path';
-import { loadConfig, saveConfig, getMonthlySummary, deleteManualAllocation, isManualAllocation, backfillManualExternalIds } from './core/local-config';
+import * as fs from 'fs/promises';
+import { loadConfig, saveConfig, getMonthlySummary, deleteManualAllocation, isManualAllocation, backfillManualExternalIds, getConfigDir } from './core/local-config';
 import { CREDITS_PER_USD, usdToCredits } from './core/pricing';
 import { AnalyticsWebviewProvider } from './ui/AnalyticsWebviewProvider';
 import { StatusBarManager } from './ui/StatusBarItem';
@@ -168,6 +169,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         { label: '$(calendar) Set Renewal Date', command: 'tokenyst.setRenewalDate' },
         { label: '$(cloud-download) Import Historical Usage…', command: 'tokenyst.importHistory' },
         { label: '$(refresh) Sync new usage', command: 'tokenyst.refresh' },
+        { label: '$(trash) Reset All Data…', command: 'tokenyst.resetData' },
       ];
 
       const pick = await vscode.window.showQuickPick(items, {
@@ -175,6 +177,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         placeHolder: 'Choose an action',
       });
       if (pick) await vscode.commands.executeCommand(pick.command);
+    }),
+
+    vscode.commands.registerCommand('tokenyst.resetData', async () => {
+      const choice = await vscode.window.showWarningMessage(
+        'Reset Tokenyst? This deletes all tracked usage, budget, and settings (~/.tokenyst) and disables tracking. This cannot be undone.',
+        { modal: true },
+        'Yes',
+      );
+      if (choice !== 'Yes') return;
+      try {
+        await fs.rm(getConfigDir(), { recursive: true, force: true });
+      } catch (err) {
+        vscode.window.showErrorMessage(
+          `Tokenyst: failed to reset data — ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return;
+      }
+      refreshAll();
+      vscode.window.showInformationMessage('Tokenyst data reset. Tracking disabled.');
     }),
 
     vscode.commands.registerCommand('tokenyst.setRenewalDate', async () => {

@@ -105,6 +105,11 @@
         "command": "tokenyst.toggleStatusBarMetric",
         "title": "Toggle Status Bar Metric (Today/This Period)",
         "category": "Tokenyst"
+      },
+      {
+        "command": "tokenyst.resetData",
+        "title": "Reset All Data",
+        "category": "Tokenyst"
       }
     ],
     "menus": {
