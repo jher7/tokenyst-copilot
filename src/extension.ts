@@ -134,6 +134,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
     }),
 
+    vscode.commands.registerCommand('tokenyst.showMenu', async () => {
+      const cfg = await loadConfig();
+      const enabled = cfg.copilot?.enabled ?? false;
+      const inDollars = (cfg.displayUnit ?? 'credits') === 'dollars';
+
+      const items: (vscode.QuickPickItem & { command: string })[] = [
+        enabled
+          ? { label: '$(debug-pause) Disable Copilot Tracking', command: 'tokenyst.disableTracking' }
+          : { label: '$(play) Enable Copilot Tracking', command: 'tokenyst.enableTracking' },
+        { label: '$(add) Add Manual Allocation', command: 'tokenyst.addAllocation' },
+        { label: '$(trash) Remove Manual Allocation', command: 'tokenyst.deleteAllocation' },
+        {
+          label: inDollars ? '$(credit-card) Show amounts in credits' : '$(credit-card) Show amounts in dollars',
+          command: 'tokenyst.toggleUnit',
+        },
+        { label: '$(dashboard) Set Monthly Budget', command: 'tokenyst.setMonthlyBudget' },
+        { label: '$(calendar) Set Renewal Date', command: 'tokenyst.setRenewalDate' },
+        { label: '$(refresh) Refresh', command: 'tokenyst.refresh' },
+      ];
+
+      const pick = await vscode.window.showQuickPick(items, {
+        title: 'Tokenyst Options',
+        placeHolder: 'Choose an action',
+      });
+      if (pick) await vscode.commands.executeCommand(pick.command);
+    }),
+
     vscode.commands.registerCommand('tokenyst.setRenewalDate', async () => {
       const current = await loadConfig();
       const dayStr = await vscode.window.showInputBox({

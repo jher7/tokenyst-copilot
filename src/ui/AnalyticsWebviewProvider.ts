@@ -27,6 +27,8 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
           await vscode.commands.executeCommand('tokenyst.deleteAllocation'); break;
         case 'toggleUnit':
           await vscode.commands.executeCommand('tokenyst.toggleUnit'); break;
+        case 'showMenu':
+          await vscode.commands.executeCommand('tokenyst.showMenu'); break;
         case 'refresh':
           await vscode.commands.executeCommand('tokenyst.refresh'); break;
       }
@@ -447,6 +449,12 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     .tracking-btn:hover {
       background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.2));
       opacity: 1;
+    }
+    /* Gear that opens the options menu — slightly larger glyph, square-ish hit area. */
+    .tracking-gear {
+      font-size: 14px;
+      line-height: 1;
+      padding: 2px 6px;
     }
 
     /* Empty state */
@@ -928,14 +936,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
             \${copilotEnabled ? 'Tracking enabled' : 'Tracking disabled'}
           </div>
           <div class="tracking-actions">
-            \${copilotEnabled
-              ? \`<button class="tracking-btn" data-action="disableTracking">Disable</button>\`
-              : \`<button class="tracking-btn" data-action="enableTracking">Enable</button>\`
-            }
-            <button class="tracking-btn" data-action="addAllocation">Manual Add</button>
-            <button class="tracking-btn" data-action="deleteAllocation">Remove</button>
-            <button class="tracking-btn" data-action="toggleUnit" title="Toggle between credits and dollars">\${displayUnit === 'dollars' ? '$' : 'cr'}</button>
-            <button class="tracking-btn" data-action="refresh">↻</button>
+            <button class="tracking-btn tracking-gear" data-action="showMenu" title="Options" aria-label="Options">⚙</button>
           </div>
         </div>
       \`;
