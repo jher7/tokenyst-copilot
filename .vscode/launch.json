@@ -8,6 +8,17 @@
       "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
       "outFiles": ["${workspaceFolder}/dist/**/*.js"],
       "preLaunchTask": "build"
+    },
+    {
+      "name": "Run Extension (CLI fixture)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+      "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+      "preLaunchTask": "build",
+      "env": {
+        "TOKENYST_COPILOT_CLI_DIR": "${workspaceFolder}/test-fixtures/copilot-cli"
+      }
     }
   ]
 }

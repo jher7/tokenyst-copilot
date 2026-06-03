@@ -34,7 +34,7 @@ Tokenyst is **strictly local**. It reads Copilot's own session files on your mac
 - **Two sources, one budget** — tracks both Copilot Chat and the Copilot CLI, combined into a single monthly total (matching GitHub's shared usage-based billing), with a **By source** breakdown so you can see how much came from each
 - **Status bar indicator** — live `$(graph) N cr` of credits spent this period
 - **Budget periods** — calendar month by default, or anchored to your plan's renewal day
-- **Real token counts** — Tokenyst reads the actual input/output token counts Copilot records for each request (input is context-inclusive), so cost reflects real usage rather than a guess
+- **Real costs** — Tokenyst uses the actual credit cost GitHub records (per-request credits for Chat, the CLI's reported "AI Credits" for the CLI), and shows the underlying token counts for transparency; it only falls back to a token-based estimate when no credit value was recorded
 - **Historical import** — backfill stats from your existing Copilot session history
 - **Manual allocations** — add custom allocations directly from the UI with credit amount, model name, and optional repository tracking, and remove them again from a picker list
 
@@ -49,14 +49,14 @@ Tokenyst reads from two local sources and combines them into one budget:
 
 **Copilot CLI**
 4. The GitHub Copilot CLI records each session under `~/.copilot/session-state/<session>/events.jsonl`.
-5. Tokenyst watches those logs and aggregates the per-model token counts the CLI reports. The CLI doesn't record a credit value, so its cost is always estimated from tokens.
+5. Tokenyst watches those logs and reads the **real** AI-credit cost the CLI records for each model (the same "AI Credits" the CLI prints when it exits), so CLI spend matches GitHub exactly. Token counts are kept for transparency.
 
-Costs are calculated from a token pricing table baked into the extension (matching GitHub's usage-based billing) and stored as allocations in `~/.tokenyst/config.json`.
+For Chat requests where no credit value is recorded — and for older CLI logs that predate the credit field — Tokenyst estimates the cost from a token pricing table baked into the extension (matching GitHub's usage-based billing). All usage is stored as allocations in `~/.tokenyst/config.json`.
 
 ## Requirements
 
 - **VS Code** 1.85.0 or newer
-- **GitHub Copilot** — the Copilot Chat extension and/or the [Copilot CLI](https://github.com/github/copilot-cli) must be installed and in use; that's what produces the session files Tokenyst reads. Either source alone is enough.
+- **GitHub Copilot** — the Copilot Chat extension and/or the GitHub Copilot CLI (the `copilot` command, installed via `npm install -g @github/copilot`) must be installed and in use; that's what produces the session files Tokenyst reads. Either source alone is enough.
 
 ## Getting started
 

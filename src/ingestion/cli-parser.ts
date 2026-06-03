@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { resolveModel, calculateCost } from '../core/pricing';
+import { resolveModel, calculateCost, CREDITS_PER_USD } from '../core/pricing';
 
 /**
  * Per-session, per-model usage aggregated from a GitHub Copilot **CLI** session.
@@ -12,9 +12,11 @@ import { resolveModel, calculateCost } from '../core/pricing';
  * per resume-cycle** (a session can resume/shutdown several times), so a session's
  * total is the sum across every `session.shutdown` event in the file.
  *
- * Unlike Copilot Chat, the CLI records no credit/USD value — cost is always priced
- * from tokens via the shared pricing table. Aggregated per session+model and
- * upserted by a stable `externalId` (`copilot-cli-<sessionId>-<model>`).
+ * The CLI records its own **authoritative** credit cost per model as `totalNanoAiu`
+ * (1 AIU = 1 GitHub AI credit; "nano" = ×10⁻⁹), matching the "AI Credits" the CLI
+ * prints. Tokenyst uses that directly; token-based pricing is only a fallback for
+ * older logs that predate the field. Aggregated per session+model and upserted by a
+ * stable `externalId` (`copilot-cli-<sessionId>-<model>`).
  */
 export interface CliSessionUsage {
   sessionId: string;
@@ -124,7 +126,10 @@ interface ModelAcc {
   output: number;
   cacheRead: number;
   cacheWrite: number;
-  reasoning: number;
+  /** Summed GitHub credit cost in nano-AIU (authoritative). */
+  nanoAiu: number;
+  /** Whether any shutdown for this model reported `totalNanoAiu` at all. */
+  sawAiu: boolean;
 }
 
 /**
@@ -161,12 +166,16 @@ export function parseCliSession(file: string, sessionId: string): CliSessionUsag
       // collapses to one bucket (and one externalId), matching the Chat parser.
       const model = resolveModel(rawModel).id;
       const acc = perModel.get(model)
-        ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 };
+        ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, nanoAiu: 0, sawAiu: false };
       acc.input += num(usage['inputTokens']);
-      acc.output += num(usage['outputTokens']);
+      acc.output += num(usage['outputTokens']); // already includes reasoning tokens
       acc.cacheRead += num(usage['cacheReadTokens']);
       acc.cacheWrite += num(usage['cacheWriteTokens']);
-      acc.reasoning += num(usage['reasoningTokens']);
+      const aiu = (entry as AnyObj)['totalNanoAiu'];
+      if (typeof aiu === 'number' && Number.isFinite(aiu)) {
+        acc.nanoAiu += aiu;
+        acc.sawAiu = true;
+      }
       perModel.set(model, acc);
     }
   }
@@ -178,27 +187,27 @@ export function parseCliSession(file: string, sessionId: string): CliSessionUsag
 
   const result: CliSessionUsage[] = [];
   for (const [model, acc] of perModel) {
-    // `inputTokens` is the full prompt and is inclusive of the cached tokens (a
-    // single request's inputTokens ≈ the whole context window, with cacheRead a
-    // subset of it). So only the fresh remainder is billed at the input rate; the
-    // cached portions are billed via the cache-write/read multipliers. Reasoning
-    // tokens are billed at the output rate. This mirrors chat-parser's fresh/cached
-    // split and avoids double-counting cached input.
-    const fresh = Math.max(0, acc.input - acc.cacheRead - acc.cacheWrite);
-    const cost = calculateCost(
-      model,
-      fresh,
-      acc.output + acc.reasoning,
-      acc.cacheWrite,
-      acc.cacheRead,
-    ) ?? 0;
+    let cost: number;
+    if (acc.sawAiu) {
+      // Authoritative: GitHub's own AI-credit cost. 1 AIU = 1 credit (= $1/CREDITS_PER_USD).
+      cost = (acc.nanoAiu / 1e9) / CREDITS_PER_USD;
+    } else {
+      // Fallback for older logs without `totalNanoAiu`: estimate from tokens.
+      // `inputTokens` is the full prompt, inclusive of cached tokens (a request's
+      // inputTokens ≈ the whole context window, with cacheRead a subset of it), so
+      // only the fresh remainder is billed at the input rate; the cached portions
+      // use the cache-write/read multipliers. `outputTokens` already includes
+      // reasoning tokens. Mirrors chat-parser's fresh/cached split.
+      const fresh = Math.max(0, acc.input - acc.cacheRead - acc.cacheWrite);
+      cost = calculateCost(model, fresh, acc.output, acc.cacheWrite, acc.cacheRead) ?? 0;
+    }
     if (cost <= 0) continue;
     result.push({
       sessionId,
       model,
       costUsd: cost,
       inputTokens: acc.input, // full prompt total, retained for transparency
-      outputTokens: acc.output + acc.reasoning,
+      outputTokens: acc.output, // includes reasoning tokens, as GitHub reports it
       cacheCreationTokens: acc.cacheWrite,
       cacheReadTokens: acc.cacheRead,
       timestamp,

@@ -2,7 +2,7 @@
   "name": "tokenyst-copilot",
   "displayName": "Tokenyst",
   "description": "GitHub Copilot usage tracking for budget management",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "author": "Joshua Herrera",
   "publisher": "TokenystCopilot",
   "icon": "resources/icons/tokenyst-marketplace.png",

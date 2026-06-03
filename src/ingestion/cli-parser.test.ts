@@ -17,6 +17,14 @@ function usage(over: Partial<Record<string, number>>): object {
   };
 }
 
+/** One modelMetrics entry. Pass `nanoAiu` to exercise the authoritative AIU path;
+ *  omit it to exercise the token-pricing fallback. */
+function model(usageOver: Partial<Record<string, number>>, nanoAiu?: number): object {
+  const entry: Record<string, unknown> = { requests: { count: 1, cost: 0 }, usage: usage(usageOver) };
+  if (nanoAiu !== undefined) entry.totalNanoAiu = nanoAiu;
+  return entry;
+}
+
 describe('getCopilotCliDir precedence', () => {
   let saved: string | undefined;
   beforeEach(() => { saved = process.env[ENV_KEY]; delete process.env[ENV_KEY]; });
@@ -74,17 +82,17 @@ describe('parseCliSession', () => {
     return file;
   }
 
-  it('sums incremental shutdown payloads per model and prices from tokens', () => {
+  it('sums incremental shutdown payloads per model and uses the authoritative AIU cost', () => {
     const id = 'sess-1';
     const file = writeSession(id, [
       // Noise events that must be ignored.
       JSON.stringify({ type: 'session.start', timestamp: '2026-05-28T14:41:35.702Z', data: {} }),
       JSON.stringify({ type: 'assistant.message', timestamp: '2026-05-28T14:41:40.000Z', data: { outputTokens: 50 } }),
-      // Two incremental shutdowns for gpt-5-mini (NOT cumulative).
-      shutdown({ 'gpt-5-mini': { usage: usage({ inputTokens: 1000, outputTokens: 100 }) } }, '2026-05-28T14:41:44.798Z'),
-      shutdown({ 'gpt-5-mini': { usage: usage({ inputTokens: 2000, outputTokens: 200, cacheReadTokens: 500 }) } }, '2026-05-28T14:42:21.984Z'),
-      // A second model in a later shutdown, plus reasoning tokens.
-      shutdown({ 'claude-haiku-4.5': { usage: usage({ inputTokens: 800, outputTokens: 40, reasoningTokens: 10 }) } }, '2026-05-28T14:47:32.688Z'),
+      // Two incremental shutdowns for gpt-5-mini (NOT cumulative), each with its own AIU.
+      shutdown({ 'gpt-5-mini': model({ inputTokens: 1000, outputTokens: 100 }, 100_000_000) }, '2026-05-28T14:41:44.798Z'),
+      shutdown({ 'gpt-5-mini': model({ inputTokens: 2000, outputTokens: 200, cacheReadTokens: 500 }, 200_000_000) }, '2026-05-28T14:42:21.984Z'),
+      // A second model in a later shutdown. outputTokens already includes reasoning.
+      shutdown({ 'claude-haiku-4.5': model({ inputTokens: 800, outputTokens: 40 }, 50_000_000) }, '2026-05-28T14:47:32.688Z'),
     ]);
 
     const records = parseCliSession(file, id);
@@ -96,13 +104,27 @@ describe('parseCliSession', () => {
     expect(gpt.outputTokens).toBe(300);          // 100 + 200
     expect(gpt.cacheReadTokens).toBe(500);
     expect(gpt.externalId).toBe(`copilot-cli-${id}-copilot-gpt-5-mini`);
-    expect(gpt.costUsd).toBeGreaterThan(0);
+    // Authoritative cost: (100M + 200M) nano-AIU = 0.3 credits = $0.003.
+    expect(gpt.costUsd).toBeCloseTo(0.003, 10);
 
     const haiku = records.find(r => r.model === 'copilot-claude-haiku-4.5')!;
-    expect(haiku.outputTokens).toBe(50);          // reasoning folded into output (40 + 10)
+    expect(haiku.outputTokens).toBe(40);          // reasoning NOT added (already in output)
+    expect(haiku.costUsd).toBeCloseTo(0.0005, 10); // 50M nano-AIU = 0.05 credits
 
     // Timestamp is the latest event in the file.
     expect(gpt.timestamp).toBe('2026-05-28T14:47:32.688Z');
+  });
+
+  it('falls back to token pricing when totalNanoAiu is absent (older logs)', () => {
+    const id = 'sess-legacy';
+    const file = writeSession(id, [
+      // No totalNanoAiu on the entry → token-priced fallback.
+      shutdown({ 'gpt-5-mini': { usage: usage({ inputTokens: 10000, outputTokens: 500, cacheReadTokens: 2000 }) } }, '2026-05-28T14:41:44.798Z'),
+    ]);
+    const [rec] = parseCliSession(file, id);
+    // fresh = 10000 - 2000 = 8000 @ $0.75/M + 500 @ $4.5/M + cacheRead 2000 @ $0.075/M
+    const expected = (8000 / 1e6) * 0.75 + (500 / 1e6) * 4.5 + (2000 / 1e6) * 0.75 * 0.1;
+    expect(rec.costUsd).toBeCloseTo(expected, 10);
   });
 
   it('returns [] for a file with no shutdown/usage events', () => {
