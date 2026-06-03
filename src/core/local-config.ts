@@ -2,7 +2,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as crypto from 'crypto';
-import type { SessionResult, ProviderId } from './types';
+import type { SessionResult, ProviderId, UsageSource } from './types';
 
 export interface CopilotConfig {
   enabled: boolean;
@@ -28,6 +28,9 @@ export interface LocalAllocation {
   externalId?: string;
   repo?: string;
   manual?: boolean;
+  /** Copilot surface (chat vs cli) this allocation came from. Absent on legacy
+   * entries — use `allocationSource()` to classify those. */
+  source?: UsageSource;
 }
 
 /** Unit used to display amounts in the UI. Cost is always stored in USD. */
@@ -81,6 +84,7 @@ function normalizeAllocation(a: unknown): LocalAllocation {
     externalId: raw.externalId != null ? String(raw.externalId) : undefined,
     repo: raw.repo != null ? String(raw.repo) : undefined,
     manual: raw.manual === true ? true : undefined,
+    source: raw.source === 'cli' || raw.source === 'chat' ? raw.source : undefined,
   };
 }
 
@@ -302,6 +306,7 @@ export async function upsertCopilotSessionAllocation(
       existing.cacheReadTokens = session.cacheReadTokens;
       existing.filesModified = session.filesModified;
       existing.repo = session.repo;
+      if (session.source) existing.source = session.source;
       if (session.at) existing.at = session.at;
       return { success: true, inserted: false };
     }
@@ -318,6 +323,7 @@ export async function upsertCopilotSessionAllocation(
       provider: session.provider ?? 'copilot',
       externalId: session.externalId,
       repo: session.repo,
+      source: session.source,
     });
     return { success: true, inserted: true };
   });
@@ -332,6 +338,19 @@ export async function upsertCopilotSessionAllocation(
  *    a hand-entered allocation leaves them null. This catches legacy manual
  *    entries that have neither the flag nor a `manual-*` externalId.
  */
+/**
+ * Classify which Copilot surface an allocation came from. Uses the explicit
+ * `source` field when present; otherwise derives from the `externalId` namespace
+ * (`copilot-cli-*` → 'cli'), defaulting to 'chat' so legacy/untagged Chat and
+ * manual entries classify sensibly. Mirrors the layered detection in
+ * `isManualAllocation`.
+ */
+export function allocationSource(a: LocalAllocation): UsageSource {
+  if (a.source === 'cli' || a.source === 'chat') return a.source;
+  if (a.externalId?.startsWith('copilot-cli-')) return 'cli';
+  return 'chat';
+}
+
 export function isManualAllocation(a: LocalAllocation): boolean {
   if (a.manual === true) return true;
   if (a.externalId?.startsWith('manual-')) return true;

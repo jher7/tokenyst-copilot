@@ -1,6 +1,6 @@
 # Tokenyst
 
-Track your **GitHub Copilot Chat** usage, estimate token costs, and watch your spend against a monthly budget — all from a VS Code sidebar and the status bar.
+Track your **GitHub Copilot Chat and Copilot CLI** usage, estimate token costs, and watch your combined spend against a monthly budget — all from a VS Code sidebar and the status bar.
 
 Tokenyst is **strictly local**. It reads Copilot's own session files on your machine, estimates costs from a pricing table baked into the extension, and stores everything in a single JSON file under your home directory. Nothing is sent to any Tokenyst server.
 
@@ -30,30 +30,39 @@ Tokenyst is **strictly local**. It reads Copilot's own session files on your mac
   - A monthly budget card showing spend vs. your cap
   - Today / This Week and Avg Daily / Weekly KPIs (with a period filter)
   - A pace projection for the current billing period
-  - Bar charts broken down by day of week, model, repo, and task
+  - Bar charts broken down by day of week, model, source (Chat vs CLI), and repo
+- **Two sources, one budget** — tracks both Copilot Chat and the Copilot CLI, combined into a single monthly total (matching GitHub's shared usage-based billing), with a **By source** breakdown so you can see how much came from each
 - **Status bar indicator** — live `$(graph) N cr` of credits spent this period
 - **Budget periods** — calendar month by default, or anchored to your plan's renewal day
-- **Real token counts** — Tokenyst reads the actual input/output token counts Copilot Chat records for each request (input is context-inclusive), so cost reflects real usage rather than a guess
+- **Real costs** — Tokenyst uses the actual credit cost GitHub records (per-request credits for Chat, the CLI's reported "AI Credits" for the CLI), and shows the underlying token counts for transparency; it only falls back to a token-based estimate when no credit value was recorded
 - **Historical import** — backfill stats from your existing Copilot session history
 - **Manual allocations** — add custom allocations directly from the UI with credit amount, model name, and optional repository tracking, and remove them again from a picker list
 
 ## How it works
 
+Tokenyst reads from two local sources and combines them into one budget:
+
+**Copilot Chat**
 1. The VS Code Copilot Chat extension records each chat session under `<VS Code User>/workspaceStorage/<workspace>/chatSessions/`.
-2. Tokenyst watches those files and aggregates usage per session and model, reading the **real** token counts (`promptTokens`/`completionTokens`) that Copilot records on each completed request.
+2. Tokenyst watches those files and aggregates usage per session and model, reading the **real** token counts (`promptTokens`/`completionTokens`) that Copilot records on each completed request. Where GitHub records a real credit value for a request, Tokenyst uses it directly.
 3. The input counts are context-inclusive (system prompt, tool definitions, attached files, and conversation history), so they reflect what Copilot actually sends — not just your typed message.
-4. Costs are calculated from a token pricing table baked into the extension (matching GitHub's usage-based billing) and stored as allocations in `~/.tokenyst/config.json`.
+
+**Copilot CLI**
+4. The GitHub Copilot CLI records each session under `~/.copilot/session-state/<session>/events.jsonl`.
+5. Tokenyst watches those logs and reads the **real** AI-credit cost the CLI records for each model (the same "AI Credits" the CLI prints when it exits), so CLI spend matches GitHub exactly. Token counts are kept for transparency.
+
+For Chat requests where no credit value is recorded — and for older CLI logs that predate the credit field — Tokenyst estimates the cost from a token pricing table baked into the extension (matching GitHub's usage-based billing). All usage is stored as allocations in `~/.tokenyst/config.json`.
 
 ## Requirements
 
 - **VS Code** 1.85.0 or newer
-- **GitHub Copilot** (the Copilot Chat extension must be installed and in use — that's what produces the session files Tokenyst reads)
+- **GitHub Copilot** — the Copilot Chat extension and/or the GitHub Copilot CLI (the `copilot` command, installed via `npm install -g @github/copilot`) must be installed and in use; that's what produces the session files Tokenyst reads. Either source alone is enough.
 
 ## Getting started
 
 1. Install Tokenyst from the VS Code Marketplace.
 2. Open the **Tokenyst** view from the activity bar (look for the Tokenyst icon).
-3. Run **Tokenyst: Enable Copilot Tracking** from the Command Palette. Tokenyst will check for Copilot session files and offer to import any existing history.
+3. Run **Tokenyst: Enable Copilot Tracking** from the Command Palette. Tokenyst will check for Copilot Chat and Copilot CLI session files and offer to import any existing history. A single toggle covers both sources.
 4. Run **Tokenyst: Set Monthly Budget** to pick a Copilot tier preset (Pro, Business, Pro+/Enterprise) or enter a custom amount.
 5. *(Optional)* Run **Tokenyst: Set Renewal Date** if your plan renews on a day other than the 1st.
 
@@ -65,8 +74,8 @@ All commands are available from the Command Palette under the **Tokenyst** categ
 |---|---|
 | **Set Monthly Budget** | Choose a Copilot tier preset or enter a custom monthly cap |
 | **Set Renewal Date** | Day of month (1–31) your plan renews; blank uses the calendar month |
-| **Enable Copilot Tracking** | Start watching Copilot session files; offers a historical import |
-| **Disable Copilot Tracking** | Stop tracking |
+| **Enable Copilot Tracking** | Start watching Copilot Chat and CLI session files; offers a historical import |
+| **Disable Copilot Tracking** | Stop tracking (both sources) |
 | **Add Manual Allocation** | Add a custom allocation with credit amount, model, and optional repository |
 | **Delete Manual Allocation** | Pick from a list of your manually-added allocations and remove one |
 | **Import Historical Usage** | Backfill allocations from the last 30 days of sessions |
@@ -87,8 +96,9 @@ Tokenyst keeps everything on your machine:
 - `~/.tokenyst/config.json` — your budget, renewal day, and recorded usage allocations
 - `~/.tokenyst/copilot.log` — debug log (only written when debug logging is enabled)
 - Reads your VS Code Copilot Chat session files under `workspaceStorage/*/chatSessions/` (written by the Copilot Chat extension)
+- Reads your Copilot CLI session logs under `~/.copilot/session-state/*/events.jsonl` (written by the Copilot CLI)
 
-Tokenyst makes **no network requests** and has **no external dependencies** — it reads only local Copilot Chat session files and writes only to `~/.tokenyst/`. Pricing data is baked into the extension; no pricing or billing service is contacted.
+Tokenyst makes **no network requests** and has **no external dependencies** — it reads only local Copilot session files and writes only to `~/.tokenyst/`. Pricing data is baked into the extension; no pricing or billing service is contacted.
 
 ### Editing allocations by hand
 
@@ -119,7 +129,7 @@ Normally you remove a manual allocation with **Tokenyst: Delete Manual Allocatio
 4. Delete the entire object (including its surrounding `{ }` and the trailing comma) from the array, then save. Make sure the file is still valid JSON.
 5. Reopen VS Code; the Usage Stats panel will reflect the change on the next refresh.
 
-Only delete entries you recognize as manual. Synced Copilot allocations always carry numeric token counts and a `copilot-chat-…` `externalId`; removing those just makes them reappear on the next sync.
+Only delete entries you recognize as manual. Synced Copilot allocations always carry numeric token counts and a `copilot-chat-…` (Chat) or `copilot-cli-…` (CLI) `externalId`; removing those just makes them reappear on the next sync.
 
 > **Note:** Spend is shown in **credits** to match Copilot's usage-based billing (100 credits = $1). Where Copilot records a real credit value for a request, Tokenyst uses it directly; otherwise it estimates from token counts and a built-in pricing table (with a cache discount for the repeated system prompt and tool definitions), so those figures are approximate.
 

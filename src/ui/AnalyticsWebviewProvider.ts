@@ -683,6 +683,21 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         .map(([repo, total]) => ({ label: repo, value: total }))
         .sort((a, b) => b.value - a.value);
 
+      // By source (Copilot Chat vs CLI). Classify from the explicit source field,
+      // falling back to the externalId namespace for legacy/untagged entries.
+      const SOURCE_LABEL = { chat: 'Chat', cli: 'CLI' };
+      const srcOf = (a) => (a.source === 'cli' || a.source === 'chat')
+        ? a.source
+        : (a.externalId && a.externalId.indexOf('copilot-cli-') === 0 ? 'cli' : 'chat');
+      const sourceMap = {};
+      for (const a of allocs) {
+        const s = srcOf(a);
+        sourceMap[s] = (sourceMap[s] || 0) + a.costUsd;
+      }
+      const bySource = Object.entries(sourceMap)
+        .map(([s, total]) => ({ label: SOURCE_LABEL[s] || s, value: total }))
+        .sort((a, b) => b.value - a.value);
+
       // Daily series for the line chart: contiguous, zero-filled days from the
       // window start to its axis end. All time starts at the earliest allocation.
       const dayKey = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
@@ -702,7 +717,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         cur.setDate(cur.getDate() + 1);
       }
 
-      return { todaySpent, thisWeekSpent, totalSpent, avgWeekly, avgDaily, avgMonthly, byDayOfWeek, byModel, byRepo, daily };
+      return { todaySpent, thisWeekSpent, totalSpent, avgWeekly, avgDaily, avgMonthly, byDayOfWeek, byModel, byRepo, bySource, daily };
     }
 
     const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -1156,6 +1171,13 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
           <div class="section-label">By model</div>
           \${renderBars(statsBreak.byModel)}
         </div>
+
+        \${statsBreak.bySource && statsBreak.bySource.length > 1 ? \`
+        <div class="chart-section">
+          <div class="section-label">By source</div>
+          \${renderBars(statsBreak.bySource)}
+        </div>
+        \` : ''}
 
         \${statsBreak.byRepo && statsBreak.byRepo.length > 0 ? \`
         <div class="chart-section">
