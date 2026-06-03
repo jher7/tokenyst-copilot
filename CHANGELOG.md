@@ -12,6 +12,10 @@ Section guide (omit any that are empty for a release):
 
 <!-- ## [Unreleased] -->
 
+## [0.3.1] - 2026-06-03
+### Changed
+- Improved Marketplace listing. No functional changes.
+
 ## [0.3.0] - 2026-06-02
 ### Added
 - Track **GitHub Copilot CLI** usage alongside Copilot Chat, combined into one monthly budget. Tracking auto-detects CLI sessions (`~/.copilot`) — no separate setup; enabling tracking and importing history now cover both sources.

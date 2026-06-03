@@ -1,8 +1,8 @@
 {
   "name": "tokenyst-copilot",
   "displayName": "Tokenyst",
-  "description": "GitHub Copilot usage tracking for budget management",
-  "version": "0.3.0",
+  "description": "Track GitHub Copilot Chat & CLI usage, token costs, and credits against a monthly budget. Local, private, no account.",
+  "version": "0.3.1",
   "author": "Joshua Herrera",
   "publisher": "TokenystCopilot",
   "icon": "resources/icons/tokenyst-marketplace.png",
@@ -19,7 +19,25 @@
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Other"
+    "Other",
+    "Visualization"
+  ],
+  "keywords": [
+    "github copilot",
+    "copilot",
+    "copilot cli",
+    "usage",
+    "cost",
+    "budget",
+    "credits",
+    "tokens",
+    "spend",
+    "premium requests",
+    "tracker",
+    "monitor",
+    "analytics",
+    "dashboard",
+    "ai"
   ],
   "activationEvents": [
     "onStartupFinished"
