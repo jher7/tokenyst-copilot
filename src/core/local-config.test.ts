@@ -22,8 +22,33 @@ import {
   upsertCopilotSessionAllocation,
   getCurrentPeriod,
   getConfigPath,
+  allocationSource,
   type LocalConfig,
+  type LocalAllocation,
 } from './local-config';
+
+describe('allocationSource', () => {
+  const base: LocalAllocation = {
+    costUsd: 1, model: 'copilot-gpt-5-mini',
+    inputTokens: 1, outputTokens: 1, cacheCreationTokens: 0, cacheReadTokens: 0,
+    filesModified: [], at: '2026-05-01T00:00:00.000Z', provider: 'copilot',
+  };
+
+  it('uses the explicit source field when present', () => {
+    expect(allocationSource({ ...base, source: 'cli' })).toBe('cli');
+    expect(allocationSource({ ...base, source: 'chat' })).toBe('chat');
+  });
+
+  it('derives cli from the externalId namespace when source is absent', () => {
+    expect(allocationSource({ ...base, externalId: 'copilot-cli-abc-copilot-gpt-5-mini' })).toBe('cli');
+  });
+
+  it('defaults to chat for legacy/untagged and chat-namespaced entries', () => {
+    expect(allocationSource(base)).toBe('chat');
+    expect(allocationSource({ ...base, externalId: 'copilot-chat-xyz-copilot-gpt-5-mini' })).toBe('chat');
+    expect(allocationSource({ ...base, externalId: 'manual-123-abcde' })).toBe('chat');
+  });
+});
 
 describe('getCurrentPeriod', () => {
   const ymd = (d: Date) => [d.getFullYear(), d.getMonth(), d.getDate()];

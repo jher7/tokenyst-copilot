@@ -8,6 +8,7 @@ import { AnalyticsWebviewProvider } from './ui/AnalyticsWebviewProvider';
 import { StatusBarManager } from './ui/StatusBarItem';
 import { syncNow, importHistory, hasImportableHistory } from './bootstrap';
 import { findChatSessionFiles, getVSCodeUserDir, setVSCodeUserDir } from './ingestion/chat-parser';
+import { findCliSessionFiles, getCopilotCliDir } from './ingestion/cli-parser';
 
 let syncInterval: ReturnType<typeof setInterval> | undefined;
 
@@ -44,9 +45,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Backfill historical usage within the given window (`since` = null imports all
   // available), then refresh. `label` describes the window for progress/result text.
   async function runImport(since: string | null, label: string): Promise<void> {
-    if (findChatSessionFiles().length === 0) {
+    if (findChatSessionFiles().length === 0 && findCliSessionFiles().length === 0) {
       vscode.window.showWarningMessage(
-        'No Copilot Chat session files found. Use Copilot Chat in VS Code first, then try again.',
+        'No Copilot Chat or CLI session files found. Use Copilot Chat or the Copilot CLI first, then try again.',
       );
       return;
     }
@@ -222,10 +223,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
 
     vscode.commands.registerCommand('tokenyst.enableTracking', async () => {
-      const eventFiles = findChatSessionFiles();
-      if (eventFiles.length === 0) {
+      const chatFiles = findChatSessionFiles();
+      const cliFiles = findCliSessionFiles();
+      if (chatFiles.length === 0 && cliFiles.length === 0) {
         vscode.window.showWarningMessage(
-          'No Copilot Chat session files found. Use Copilot Chat in VS Code first, then try again.',
+          'No Copilot Chat or CLI session files found. Use Copilot Chat or the Copilot CLI first, then try again.',
         );
         return;
       }
@@ -236,8 +238,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       };
       await saveConfig(current);
       refreshAll();
+      const parts = [
+        chatFiles.length > 0 ? `${chatFiles.length} chat` : null,
+        cliFiles.length > 0 ? `${cliFiles.length} CLI` : null,
+      ].filter(Boolean).join(' + ');
       vscode.window.showInformationMessage(
-        `Copilot tracking enabled. Watching ${eventFiles.length} session(s).`,
+        `Copilot tracking enabled. Watching ${parts} session(s).`,
       );
 
       // Offer to backfill usage from the last 30 days that predates the watermark
@@ -428,7 +434,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
   eventsWatcher.onDidChange(onEventsChange);
   eventsWatcher.onDidCreate(onEventsChange);
-  context.subscriptions.push(eventsWatcher, {
+
+  // Watch Copilot CLI session logs (~/.copilot/session-state/<id>/events.jsonl) with
+  // the same debounced handler, so CLI usage syncs live just like Chat.
+  const cliEventsWatcher = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(
+      vscode.Uri.file(getCopilotCliDir()),
+      'session-state/*/events.jsonl',
+    ),
+  );
+  cliEventsWatcher.onDidChange(onEventsChange);
+  cliEventsWatcher.onDidCreate(onEventsChange);
+
+  context.subscriptions.push(eventsWatcher, cliEventsWatcher, {
     dispose: () => { if (eventsDebounce) clearTimeout(eventsDebounce); },
   });
 
