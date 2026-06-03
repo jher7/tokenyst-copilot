@@ -17,9 +17,6 @@ Section guide (omit any that are empty for a release):
 - Track **GitHub Copilot CLI** usage alongside Copilot Chat, combined into one monthly budget. Tracking auto-detects CLI sessions (`~/.copilot`) — no separate setup; enabling tracking and importing history now cover both sources.
 - New source in the breakdown stats panel showing how much spend came from Chat vs the CLI.
 
-### Changed
-- CLI spend uses the actual AI-credit cost GitHub records for each session (the same "AI Credits" the CLI reports), so it matches your real usage rather than a token-based estimate.
-
 ## [0.2.1] - 2026-06-02
 ### Fixed
 - Fixed tracking unexpectedly disabling itself during normal use, caused by a config-file write race when syncing and importing usage at the same time
