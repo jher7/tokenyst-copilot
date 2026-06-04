@@ -58,6 +58,40 @@ For Chat requests where no credit value is recorded — and for older CLI logs t
 - **VS Code** 1.85.0 or newer
 - **GitHub Copilot** — the Copilot Chat extension and/or the GitHub Copilot CLI (the `copilot` command, installed via `npm install -g @github/copilot`) must be installed and in use; that's what produces the session files Tokenyst reads. Either source alone is enough.
 
+### Remote development (dev containers, WSL, SSH, Codespaces)
+
+Copilot's two data sources land on **opposite sides** of VS Code's client/remote split:
+
+- **Copilot Chat** sessions are persisted on the **host (client) side** — even for a dev
+  container or other remote workspace. So Chat usage from your remote work is already in
+  your host's storage.
+- **Copilot CLI** writes inside whatever environment it runs in — the **container/remote**
+  if you use it there.
+
+A single extension instance can only read one side. **By default Tokenyst runs host-side**
+(its `extensionKind` prefers `ui`), which tracks **all your Copilot Chat — local and
+remote — plus Copilot CLI run on the host.** You don't need to install it in the container
+for Chat tracking; it just works.
+
+The one thing this default does *not* see is **Copilot CLI run *inside* a container**. If
+that's your workflow, tell VS Code to run Tokenyst in the remote instead by adding this to
+your User (or dev container) `settings.json`, then reload:
+
+```jsonc
+"remote.extensionKind": {
+  "TokenystCopilot.tokenyst-copilot": ["workspace"]
+}
+```
+
+VS Code will offer to install Tokenyst in the container; once it does, it tracks the
+container's Copilot CLI usage (and its data lives in the container's `~/.tokenyst/`).
+
+Note this is **one or the other** per setup: a container-side instance only sees the
+container's files, so in that window it tracks the container's Copilot CLI and **none of
+your host-side usage — neither Copilot Chat (which is stored host-side) nor any Copilot CLI
+you run on the host.** Each side keeps its own separate `~/.tokenyst/` data. In a dev
+container, Tokenyst shows a one-time hint pointing here so you can choose.
+
 ## Getting started
 
 1. Install Tokenyst from the VS Code Marketplace.

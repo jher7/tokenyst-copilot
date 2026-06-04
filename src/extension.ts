@@ -195,6 +195,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         );
         return;
       }
+      // A full reset should re-arm one-time UI nudges (these live in globalState,
+      // not ~/.tokenyst, so the folder delete above doesn't touch them).
+      await context.globalState.update('cliHintShown', undefined);
       refreshAll();
       vscode.window.showInformationMessage('Tokenyst data reset. Tracking disabled.');
     }),
@@ -455,6 +458,47 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (freshCfg.copilot?.enabled) {
     syncNow().catch(() => {});
   }
+
+  maybeShowContainerCliHint(context);
+}
+
+/**
+ * In a dev container, Copilot Chat sessions are persisted on the host (client) side,
+ * while the Copilot CLI writes inside the container — opposite sides of the remote
+ * split, so a single instance can only read one. Tokenyst defaults to running host-side
+ * (`extensionKind` prefers `ui`) to capture Chat. This shows a one-time hint telling
+ * dev container users how to switch to container-side CLI tracking instead.
+ *
+ * Gated three ways so it never confuses anyone it shouldn't:
+ *  - only in a dev/attached-container window (`remoteName`) — regular local users have
+ *    `remoteName === undefined` and never see it;
+ *  - only when we're running host-side (`extensionKind === UI`) — a user who already
+ *    opted into container-side tracking isn't told about a gap they've resolved;
+ *  - only once ever (persisted in `globalState`).
+ */
+function maybeShowContainerCliHint(context: vscode.ExtensionContext): void {
+  const inContainer =
+    vscode.env.remoteName === 'dev-container' || vscode.env.remoteName === 'attached-container';
+  const runningHostSide = context.extension.extensionKind === vscode.ExtensionKind.UI;
+  if (!inContainer || !runningHostSide || context.globalState.get('cliHintShown')) return;
+
+  void context.globalState.update('cliHintShown', true);
+  const HOW = 'How';
+  void vscode.window
+    .showInformationMessage(
+      'Tokenyst is tracking Copilot Chat for this dev container. Copilot CLI used inside the ' +
+        'container isn’t tracked — you can switch to it with the remote.extensionKind setting.',
+      HOW,
+    )
+    .then((choice) => {
+      if (choice === HOW) {
+        void vscode.env.openExternal(
+          vscode.Uri.parse(
+            'https://github.com/jher7/tokenyst-copilot#remote-development-dev-containers-wsl-ssh-codespaces',
+          ),
+        );
+      }
+    });
 }
 
 export function deactivate(): void {

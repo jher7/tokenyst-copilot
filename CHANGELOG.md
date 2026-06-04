@@ -12,6 +12,13 @@ Section guide (omit any that are empty for a release):
 
 <!-- ## [Unreleased] -->
 
+## [0.4.0] - 2026-06-04
+### Fixed
+- Enabling Copilot tracking inside a **dev container** no longer fails with "No Copilot Chat session files found." Tokenyst now runs on the host by default, where VS Code stores Copilot Chat sessions, so Chat usage from dev containers (and WSL, SSH, Codespaces) is tracked automatically. No need to install it in the remote.
+
+### Added
+- Optional tracking of **Copilot CLI usage from inside a container**, via VS Code's `remote.extensionKind` setting.
+
 ## [0.3.1] - 2026-06-03
 ### Changed
 - Improved Marketplace listing. No functional changes.
