@@ -2,7 +2,7 @@
   "name": "tokenyst-copilot",
   "displayName": "Tokenyst",
   "description": "Track GitHub Copilot Chat & CLI usage, token costs, and credits against a monthly budget. Local, private, no account.",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "author": "Joshua Herrera",
   "publisher": "TokenystCopilot",
   "icon": "resources/icons/tokenyst-marketplace.png",
@@ -43,6 +43,10 @@
     "onStartupFinished"
   ],
   "main": "./dist/extension.js",
+  "extensionKind": [
+    "ui",
+    "workspace"
+  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
