@@ -211,6 +211,35 @@ describe('concurrent config writes do not disable tracking', () => {
   });
 });
 
+describe('upsertCopilotSessionAllocation persists sessionId and title', () => {
+  beforeEach(async () => {
+    holder.home = await fs.mkdtemp(path.join(os.tmpdir(), 'tokenyst-test-'));
+    await saveConfig({ allocations: [], enabled: true, copilot: { enabled: true } });
+  });
+  afterEach(async () => { await fs.rm(holder.home, { recursive: true, force: true }); });
+
+  const base = {
+    costUsd: 0.1, model: 'copilot-gpt-4o',
+    inputTokens: 1, outputTokens: 1, cacheCreationTokens: 0, cacheReadTokens: 0,
+    filesModified: [], provider: 'copilot' as const,
+    externalId: 'copilot-chat-s1-gpt-4o', at: '2026-05-01T08:00:00.000Z',
+  };
+
+  it('stores sessionId/title on insert and refreshes them on re-upsert', async () => {
+    await upsertCopilotSessionAllocation({ ...base, sessionId: 's1', title: 'First prompt' });
+    let cfg = await loadConfig();
+    expect(cfg.allocations).toHaveLength(1);
+    expect(cfg.allocations[0].sessionId).toBe('s1');
+    expect(cfg.allocations[0].title).toBe('First prompt');
+
+    // Same externalId → overwrite in place; an updated title is refreshed.
+    await upsertCopilotSessionAllocation({ ...base, sessionId: 's1', title: 'Renamed prompt' });
+    cfg = await loadConfig();
+    expect(cfg.allocations).toHaveLength(1);
+    expect(cfg.allocations[0].title).toBe('Renamed prompt');
+  });
+});
+
 describe('loadConfig with a corrupt file', () => {
   beforeEach(async () => {
     holder.home = await fs.mkdtemp(path.join(os.tmpdir(), 'tokenyst-test-'));

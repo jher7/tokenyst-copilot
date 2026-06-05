@@ -23,6 +23,8 @@ export interface CopilotSessionUsage {
   timestamp: string;
   externalId: string;
   repo?: string;
+  /** Human-readable title: the session's first user prompt (truncated). */
+  title?: string;
 }
 
 export interface ChatSessionFile {
@@ -143,15 +145,25 @@ function harvest(
   records: Map<string, UsageRecord>,
   credits: Map<string, number>,
   times: number[],
+  title: { text?: string },
 ): void {
   if (Array.isArray(value)) {
-    for (const item of value) harvest(item, records, credits, times);
+    for (const item of value) harvest(item, records, credits, times, title);
     return;
   }
   if (!isObj(value)) return;
 
   if (typeof value['completedAt'] === 'number') times.push(value['completedAt'] as number);
   if (typeof value['creationDate'] === 'number') times.push(value['creationDate'] as number);
+
+  // A request's user prompt lives in `message.text`. The first one seen (file order
+  // ≈ chronological) is the session's opening prompt — what VS Code shows as the
+  // chat title. Capture it once.
+  if (title.text === undefined) {
+    const msg = isObj(value['message']) ? (value['message'] as AnyObj) : undefined;
+    const text = msg && typeof msg['text'] === 'string' ? (msg['text'] as string).trim() : '';
+    if (text) title.text = text;
+  }
 
   // Variant A: result object with `details` + `usage:{promptTokens,completionTokens}`.
   // Variant B: agent-mode metadata with `promptTokens`/`outputTokens` + `resolvedModel`.
@@ -191,7 +203,15 @@ function harvest(
     }
   }
 
-  for (const key of Object.keys(value)) harvest(value[key], records, credits, times);
+  for (const key of Object.keys(value)) harvest(value[key], records, credits, times, title);
+}
+
+/** Trim a prompt down to a compact, single-line session title. */
+function toTitle(text: string | undefined, max = 80): string | undefined {
+  if (!text) return undefined;
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  if (!oneLine) return undefined;
+  return oneLine.length > max ? oneLine.slice(0, max - 1).trimEnd() + '…' : oneLine;
 }
 
 function readJsonOrJsonl(file: string): unknown[] {
@@ -237,9 +257,12 @@ export function parseChatSession(file: string, sessionId: string, workspaceHash 
   const records = new Map<string, UsageRecord>();
   const credits = new Map<string, number>();
   const times: number[] = [];
-  for (const value of readJsonOrJsonl(file)) harvest(value, records, credits, times);
+  const titleRef: { text?: string } = {};
+  for (const value of readJsonOrJsonl(file)) harvest(value, records, credits, times, titleRef);
 
   if (records.size === 0) return [];
+
+  const title = toTitle(titleRef.text);
 
   // Cost per session+model. For each request: if GitHub recorded a real credit value,
   // use it directly (authoritative — it already accounts for caching). Otherwise price
@@ -289,6 +312,7 @@ export function parseChatSession(file: string, sessionId: string, workspaceHash 
       timestamp: ts,
       externalId: `copilot-chat-${sessionId}-${model}`,
       repo,
+      title,
     });
   }
   return result;

@@ -52,6 +52,8 @@ async function recordUsage(u: CopilotSessionUsage | CliSessionUsage, source: Usa
     repo: u.repo,
     source,
     at: u.timestamp,
+    sessionId: u.sessionId,
+    title: u.title,
   });
   debugLog(
     `bootstrap: ${result.inserted ? 'inserted' : 'updated'} ${u.externalId} ` +

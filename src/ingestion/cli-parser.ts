@@ -29,6 +29,8 @@ export interface CliSessionUsage {
   timestamp: string;
   externalId: string;
   repo?: string;
+  /** Human-readable session title. Not currently derived for CLI sessions. */
+  title?: string;
 }
 
 export interface CliSessionFile {

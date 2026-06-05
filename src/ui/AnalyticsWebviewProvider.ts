@@ -555,6 +555,13 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     function fmtCrds(usd) {
       return displayUnit === 'dollars' ? fmtCreditsNum(usd) : fmtCreditsNum(usd) + ' crds';
     }
+    // Compact token counts for bar values: "1.2M", "34.5K", "812".
+    function fmtTokens(n) {
+      n = n || 0;
+      if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\\.0$/, '') + 'M';
+      if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\\.0$/, '') + 'K';
+      return String(Math.round(n));
+    }
 
     function esc(s) {
       return String(s)
@@ -717,7 +724,78 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         cur.setDate(cur.getDate() + 1);
       }
 
-      return { todaySpent, thisWeekSpent, totalSpent, avgWeekly, avgDaily, avgMonthly, byDayOfWeek, byModel, byRepo, bySource, daily };
+      // By session. Group allocations by session id (new entries carry it; legacy
+      // entries fall back to the externalId). Accumulate cost + tokens, and pick a
+      // readable label: the scraped chat title, else repo · shortId · model.
+      const sessAcc = {};
+      for (const a of allocs) {
+        const key = a.sessionId || a.externalId || 'unknown';
+        let s = sessAcc[key];
+        if (!s) {
+          const shortId = String(a.sessionId || key).replace(/^copilot-(chat|cli)-/, '').slice(0, 6);
+          const fallback = (a.repo ? a.repo + ' · ' : '') + shortId + ' · ' + fmtModel(a.model);
+          s = sessAcc[key] = { label: a.title || fallback, hasTitle: !!a.title, cost: 0, input: 0, output: 0 };
+        }
+        if (a.title && !s.hasTitle) { s.label = a.title; s.hasTitle = true; }
+        s.cost += a.costUsd;
+        s.input += a.inputTokens || 0;
+        s.output += a.outputTokens || 0;
+      }
+      const sessions = Object.keys(sessAcc).map(k => sessAcc[k]);
+      const topSessions = (val) => sessions
+        .map(s => ({ label: s.label, value: val(s) }))
+        .filter(r => r.value > 0)
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 8);
+      const topSessionsByCredits = topSessions(s => s.cost);
+      const topSessionsByInput = topSessions(s => s.input);
+      const topSessionsByOutput = topSessions(s => s.output);
+
+      // Token totals across the window (treat nulls as 0).
+      const tokenTotals = { input: 0, output: 0, cacheCreation: 0, cacheRead: 0 };
+      for (const a of allocs) {
+        tokenTotals.input += a.inputTokens || 0;
+        tokenTotals.output += a.outputTokens || 0;
+        tokenTotals.cacheCreation += a.cacheCreationTokens || 0;
+        tokenTotals.cacheRead += a.cacheReadTokens || 0;
+      }
+      const cacheBase = tokenTotals.cacheRead + tokenTotals.cacheCreation + tokenTotals.input;
+      const cacheReusePct = cacheBase > 0 ? tokenTotals.cacheRead / cacheBase : 0;
+
+      // Optimization insights — short heuristic hints. Thresholds are tunable.
+      const LOW_CACHE_REUSE = 0.15, HOTSPOT_SHARE = 0.70, EXPENSIVE_FACTOR = 2;
+      const insights = [];
+      if (cacheBase > 0 && cacheReusePct < LOW_CACHE_REUSE) {
+        insights.push('Low cache reuse (' + (cacheReusePct * 100).toFixed(0) +
+          '%) — repeated context is being re-sent instead of served from cache.');
+      }
+      if (byModel.length && byModel[0].value / totalSpent >= HOTSPOT_SHARE) {
+        insights.push(byModel[0].label + ' drives ' +
+          (byModel[0].value / totalSpent * 100).toFixed(0) + '% of spend.');
+      }
+      if (byRepo.length && byRepo[0].value / totalSpent >= HOTSPOT_SHARE) {
+        insights.push(byRepo[0].label + ' accounts for ' +
+          (byRepo[0].value / totalSpent * 100).toFixed(0) + '% of spend.');
+      }
+      const ratios = sessions.filter(s => s.output > 0).map(s => s.cost / (s.output / 1000));
+      if (ratios.length >= 3) {
+        const sorted = ratios.slice().sort((a, b) => a - b);
+        const median = sorted[Math.floor(sorted.length / 2)];
+        const top = sessions.slice().sort((a, b) => b.cost - a.cost)[0];
+        if (top && top.output > 0 && median > 0 &&
+            top.cost / (top.output / 1000) > median * EXPENSIVE_FACTOR) {
+          insights.push('"' + top.label + '" spends a lot relative to its output — ' +
+            'consider a smaller model or a tighter prompt.');
+        }
+      }
+      const insightsTop = insights.slice(0, 3);
+
+      return {
+        todaySpent, thisWeekSpent, totalSpent, avgWeekly, avgDaily, avgMonthly,
+        byDayOfWeek, byModel, byRepo, bySource, daily,
+        topSessionsByCredits, topSessionsByInput, topSessionsByOutput,
+        tokenTotals, cacheReusePct, insights: insightsTop,
+      };
     }
 
     const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -763,7 +841,8 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       return { type: 'no-budget', projectedTotal, endOfMonth };
     }
 
-    function renderBars(rows) {
+    function renderBars(rows, fmt) {
+      fmt = fmt || fmtCrds;
       if (!rows || rows.length === 0) return '<div class="bar-row"><span class="bar-label" style="color:var(--vscode-descriptionForeground)">No data</span></div>';
       const total = rows.reduce((s, r) => s + r.value, 0);
       return rows.map(r => {
@@ -774,7 +853,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
             <div class="bar-track">
               <div class="bar-fill" data-pct="\${pct}"></div>
             </div>
-            <span class="bar-value">\${esc(fmtCrds(r.value))}</span>
+            <span class="bar-value">\${esc(fmt(r.value))}</span>
           </div>
         \`;
       }).join('');
@@ -1162,6 +1241,13 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       const breakdownHtml = statsBreak.empty ? \`<div class="section-empty">\${emptyMsg}</div>\` : \`
         \${renderUsageChart(statsBreak.daily)}
 
+        \${statsBreak.insights && statsBreak.insights.length ? \`
+        <div class="chart-section">
+          <div class="section-label">Insights</div>
+          \${statsBreak.insights.map(t => \`<div style="padding:2px 0;color:var(--vscode-descriptionForeground);font-size:11px;line-height:1.4">• \${esc(t)}</div>\`).join('')}
+        </div>
+        \` : ''}
+
         <div class="chart-section">
           <div class="section-label">By day of week</div>
           \${renderBars(statsBreak.byDayOfWeek)}
@@ -1171,6 +1257,34 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
           <div class="section-label">By model</div>
           \${renderBars(statsBreak.byModel)}
         </div>
+
+        <div class="chart-section">
+          <div class="section-label">Token breakdown</div>
+          \${renderBars([
+            { label: 'Input', value: statsBreak.tokenTotals.input },
+            { label: 'Output', value: statsBreak.tokenTotals.output },
+            { label: 'Cache write', value: statsBreak.tokenTotals.cacheCreation },
+            { label: 'Cache read', value: statsBreak.tokenTotals.cacheRead },
+          ].filter(r => r.value > 0), fmtTokens)}
+          <div style="padding:2px 0;color:var(--vscode-descriptionForeground);font-size:11px">Cache reuse: \${(statsBreak.cacheReusePct * 100).toFixed(0)}%</div>
+        </div>
+
+        \${statsBreak.topSessionsByCredits && statsBreak.topSessionsByCredits.length ? \`
+        <div class="chart-section">
+          <div class="section-label">Top sessions · credits</div>
+          \${renderBars(statsBreak.topSessionsByCredits)}
+        </div>
+
+        <div class="chart-section">
+          <div class="section-label">Top sessions · input tokens</div>
+          \${renderBars(statsBreak.topSessionsByInput, fmtTokens)}
+        </div>
+
+        <div class="chart-section">
+          <div class="section-label">Top sessions · output tokens</div>
+          \${renderBars(statsBreak.topSessionsByOutput, fmtTokens)}
+        </div>
+        \` : ''}
 
         \${statsBreak.bySource && statsBreak.bySource.length > 1 ? \`
         <div class="chart-section">
