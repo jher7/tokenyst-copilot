@@ -7,18 +7,13 @@ Tokenyst is **strictly local**. It reads Copilot's own session files on your mac
 
 <table>
   <tr>
-    <td align="center" width="32%"><img src="https://raw.githubusercontent.com/jher7/tokenyst-copilot/master/resources/screenshots/screen-1.jpg" alt="Usage Stats"></td>
-    <td width="2%"></td>
-    <td align="center" width="32%"><img src="https://raw.githubusercontent.com/jher7/tokenyst-copilot/master/resources/screenshots/screen-2.jpg" alt="Breakdown"></td>
-    <td width="2%"></td>
-    <td align="center" width="32%"><img src="https://raw.githubusercontent.com/jher7/tokenyst-copilot/master/resources/screenshots/screen-3.jpg" alt="Sessions"></td>
+    <td align="center"><img src="https://raw.githubusercontent.com/jher7/tokenyst-copilot/master/resources/screenshots/screen-1.jpg" alt="Usage Stats" width="600"><br><strong>Usage Stats</strong></td>
   </tr>
   <tr>
-    <td align="center"><strong>Usage Stats</strong></td>
-    <td></td>
-    <td align="center"><strong>Breakdown</strong></td>
-    <td></td>
-    <td align="center"><strong>Sessions</strong></td>
+    <td align="center"><img src="https://raw.githubusercontent.com/jher7/tokenyst-copilot/master/resources/screenshots/screen-2.jpg" alt="Breakdown" width="600"><br><strong>Breakdown</strong></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="https://raw.githubusercontent.com/jher7/tokenyst-copilot/master/resources/screenshots/screen-3.jpg" alt="Sessions" width="600"><br><strong>Sessions</strong></td>
   </tr>
 </table>
 
