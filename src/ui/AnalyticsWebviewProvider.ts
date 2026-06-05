@@ -440,37 +440,56 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       background: var(--vscode-dropdown-background, #1e1e1e);
       color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
     }
-    .session-order-btn {
-      background: none;
-      border: 1px solid var(--vscode-dropdown-border, rgba(128,128,128,0.3));
-      color: var(--vscode-foreground);
-      border-radius: 3px;
-      font-size: 15px;
-      line-height: 1;
-      font-family: inherit;
-      padding: 3px 7px;
-      cursor: pointer;
-      opacity: 0.7;
-    }
-    .session-order-btn:hover {
-      background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.2));
-      opacity: 1;
-    }
     .session-list {
       padding: 4px 12px 10px;
     }
+    /* Shared 4-column layout for the header and each row: date · source · title · value.
+       Fixed widths on date/source/value keep the header aligned with the rows;
+       the title column flexes and ellipsizes. */
+    .session-thead,
+    .session-summary {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+    }
+    .session-col-date { flex: 0 0 74px; }
+    .session-col-source { flex: 0 0 34px; }
+    .session-col-title { flex: 1 1 auto; min-width: 0; }
+    .session-col-value { flex: 0 0 auto; margin-left: auto; text-align: right; }
+    .session-thead {
+      padding-bottom: 6px;
+      margin-bottom: 4px;
+      border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, rgba(128,128,128,0.15));
+    }
+    .session-th {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--vscode-descriptionForeground);
+      cursor: pointer;
+      user-select: none;
+    }
+    .session-th:hover,
+    .session-th.active {
+      color: var(--vscode-foreground);
+    }
+    .session-sort-arrow {
+      margin-left: 2px;
+    }
     .session-row {
       padding: 8px 0;
+      cursor: pointer;
+    }
+    .session-row:hover .session-title {
+      color: var(--vscode-textLink-foreground, var(--vscode-foreground));
     }
     .session-row + .session-row {
       border-top: 1px solid var(--vscode-sideBarSectionHeader-border, rgba(128,128,128,0.08));
     }
-    .session-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      gap: 8px;
-      margin-bottom: 6px;
+    .session-date {
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground);
+      white-space: nowrap;
     }
     .session-title {
       font-size: 12px;
@@ -478,17 +497,43 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    /* Expanded rows show the full title rather than truncating. */
+    .session-row.expanded .session-title {
+      white-space: normal;
+      overflow: visible;
+    }
+    .session-source {
+      font-size: 10px;
+      color: var(--vscode-descriptionForeground);
+    }
     .session-value {
       font-size: 11px;
       color: var(--vscode-descriptionForeground);
       font-family: monospace;
       white-space: nowrap;
     }
-    .session-track {
-      height: 6px;
-      background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.2));
-      border-radius: 3px;
-      overflow: hidden;
+    .session-detail {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--vscode-sideBarSectionHeader-border, rgba(128,128,128,0.15));
+    }
+    .session-detail-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 11px;
+    }
+    .session-detail-key {
+      color: var(--vscode-descriptionForeground);
+      flex-shrink: 0;
+    }
+    .session-detail-val {
+      text-align: right;
+      font-family: monospace;
+      word-break: break-word;
     }
 
     /* Pace section */
@@ -593,18 +638,23 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     // Sessions list controls: metric to sort by, sort direction, and an
     // independent date-range window (mirrors the Breakdown filter). Defaults to
     // all time so every session is visible without changing the period.
-    let sessionMetric = persisted.sessionMetric ?? 'credits'; // 'credits' | 'input' | 'output'
+    let sessionMetric = persisted.sessionMetric ?? 'credits'; // 'credits' | 'input' | 'output' (value column)
+    let sessionSort = persisted.sessionSort ?? 'metric';      // 'date' | 'source' | 'title' | 'metric' (sort column)
     let sessionOrder = persisted.sessionOrder ?? 'desc';      // 'desc' | 'asc'
     let sessionWindow = persisted.sessionWindow ?? 0;         // 'month' | 'last' | 0 | 'custom'
     let sessionCustomStartMs = persisted.sessionCustomStartMs ?? null;
     let sessionCustomEndMs = persisted.sessionCustomEndMs ?? null;
+    // Session rows the user has expanded (by session id). In-memory only — survives
+    // re-renders/sync ticks within this view, resets on full reload.
+    const expandedSessions = new Set(persisted.expandedSessions || []);
     // Custom range bounds (ms), local day boundaries. Null until the user sets them.
     let customStartMs = persisted.customStartMs ?? null;
     let customEndMs = persisted.customEndMs ?? null;
     function saveUiState() {
       vscode.setState({
         breakdownWindow, budgetOpen, breakdownOpen, sessionsOpen,
-        sessionMetric, sessionOrder, sessionWindow, sessionCustomStartMs, sessionCustomEndMs,
+        sessionMetric, sessionSort, sessionOrder, sessionWindow, sessionCustomStartMs, sessionCustomEndMs,
+        expandedSessions: Array.from(expandedSessions),
         customStartMs, customEndMs,
       });
     }
@@ -821,8 +871,9 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       }
 
       // By session. Group allocations by session id (new entries carry it; legacy
-      // entries fall back to the externalId). Accumulate cost + tokens, and pick a
-      // readable label: the scraped chat title, else repo · shortId · model.
+      // entries fall back to the externalId). Accumulate cost + tokens (plus the
+      // fields needed for the expandable detail), and pick a readable label: the
+      // scraped chat title, else repo · shortId · model.
       const sessAcc = {};
       for (const a of allocs) {
         const key = a.sessionId || a.externalId || 'unknown';
@@ -830,12 +881,22 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         if (!s) {
           const shortId = String(a.sessionId || key).replace(/^copilot-(chat|cli)-/, '').slice(0, 6);
           const fallback = (a.repo ? a.repo + ' · ' : '') + shortId + ' · ' + fmtModel(a.model);
-          s = sessAcc[key] = { label: a.title || fallback, hasTitle: !!a.title, cost: 0, input: 0, output: 0 };
+          s = sessAcc[key] = {
+            id: String(key), shortId, label: a.title || fallback, hasTitle: !!a.title,
+            source: srcOf(a), repo: a.repo || null, models: {}, atMs: 0,
+            cost: 0, input: 0, output: 0, cacheCreation: 0, cacheRead: 0,
+          };
         }
         if (a.title && !s.hasTitle) { s.label = a.title; s.hasTitle = true; }
+        if (!s.repo && a.repo) s.repo = a.repo;
+        if (a.model) s.models[fmtModel(a.model)] = true;
+        const t = Date.parse(a.at);
+        if (Number.isFinite(t) && t > s.atMs) s.atMs = t;
         s.cost += a.costUsd;
         s.input += a.inputTokens || 0;
         s.output += a.outputTokens || 0;
+        s.cacheCreation += a.cacheCreationTokens || 0;
+        s.cacheRead += a.cacheReadTokens || 0;
       }
       const sessions = Object.keys(sessAcc).map(k => sessAcc[k]);
 
@@ -897,6 +958,12 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       return m + '/' + d + '/' + date.getFullYear();
     }
 
+    function fmtYMD(date) {
+      const m = String(date.getMonth() + 1).padStart(2, '0');
+      const d = String(date.getDate()).padStart(2, '0');
+      return date.getFullYear() + '/' + m + '/' + d;
+    }
+
     function ordinal(n) {
       const s = ['th', 'st', 'nd', 'rd'];
       const v = n % 100;
@@ -952,40 +1019,92 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       return 'green';
     }
 
-    // Sessions list: every session sorted by the chosen metric and direction.
-    // Each item stacks the title over a progress bar (bar width is relative to the
-    // largest value in the list, so the leader reads as a full bar).
+    // Sessions list: a 4-column table (Date · Source · Title · metric value).
+    // Headers are clickable to choose the sort column; clicking the active column
+    // again flips direction. The metric column shows whichever metric the dropdown
+    // selects. Rows expand to a detail view on click.
     const SESSION_METRIC_VALUE = {
       credits: s => s.cost,
       input: s => s.input,
       output: s => s.output,
     };
+    const SESSION_METRIC_LABEL = { credits: 'Credits', input: 'Input', output: 'Output' };
     function sessionMetricFmt(metric) {
       return metric === 'credits' ? fmtCrds : fmtTokens;
     }
-    function renderSessionList(sessions, metric, order) {
+    function renderSessionList(sessions, metric) {
       const pick = SESSION_METRIC_VALUE[metric] || SESSION_METRIC_VALUE.credits;
       const fmt = sessionMetricFmt(metric);
       const rows = (sessions || [])
-        .map(s => ({ label: s.label, value: pick(s) }))
-        .filter(r => r.value > 0)
-        .sort((a, b) => order === 'asc' ? a.value - b.value : b.value - a.value);
+        .map(s => ({ s, value: pick(s) }))
+        .filter(r => r.value > 0);
       if (rows.length === 0) return '<div class="section-empty">No session data for this period.</div>';
-      const max = Math.max.apply(null, rows.map(r => r.value));
-      return rows.map(r => {
-        const pct = max > 0 ? (r.value / max * 100).toFixed(1) : '0';
+
+      // Sort by the active column; string columns case-insensitive, others numeric.
+      const cmp = {
+        date: (a, b) => a.s.atMs - b.s.atMs,
+        source: (a, b) => String(a.s.source).localeCompare(String(b.s.source)),
+        title: (a, b) => String(a.s.label).toLowerCase().localeCompare(String(b.s.label).toLowerCase()),
+        metric: (a, b) => a.value - b.value,
+      };
+      const sortFn = cmp[sessionSort] || cmp.metric;
+      const dir = sessionOrder === 'asc' ? 1 : -1;
+      rows.sort((a, b) => dir * sortFn(a, b));
+
+      // Sort indicator on the active header.
+      const arrow = (col) => sessionSort === col ? \`<span class="session-sort-arrow">\${sessionOrder === 'asc' ? '↑' : '↓'}</span>\` : '';
+      const th = (col, label, extra) => \`<span class="session-th \${extra || ''}\${sessionSort === col ? ' active' : ''}" data-sort="\${col}">\${esc(label)}\${arrow(col)}</span>\`;
+      const header = \`
+        <div class="session-thead">
+          \${th('date', 'Date', 'session-col-date')}
+          \${th('source', 'Source', 'session-col-source')}
+          \${th('title', 'Title', 'session-col-title')}
+          \${th('metric', SESSION_METRIC_LABEL[metric] || 'Value', 'session-col-value')}
+        </div>
+      \`;
+
+      const body = rows.map(r => {
+        const s = r.s;
+        const expanded = expandedSessions.has(s.id);
+        const srcLabel = s.source === 'cli' ? 'CLI' : 'Chat';
+        const date = s.atMs ? fmtYMD(new Date(s.atMs)) : '—';
         return \`
-          <div class="session-row">
-            <div class="session-head">
-              <span class="session-title" title="\${esc(r.label)}">\${esc(r.label)}</span>
-              <span class="session-value">\${esc(fmt(r.value))}</span>
+          <div class="session-row\${expanded ? ' expanded' : ''}" data-session-id="\${esc(s.id)}">
+            <div class="session-summary">
+              <span class="session-col-date session-date">\${esc(date)}</span>
+              <span class="session-col-source session-source">\${srcLabel}</span>
+              <span class="session-col-title session-title" title="\${esc(s.label)}">\${esc(s.label)}</span>
+              <span class="session-col-value session-value">\${esc(fmt(r.value))}</span>
             </div>
-            <div class="session-track">
-              <div class="bar-fill" data-pct="\${pct}"></div>
-            </div>
+            \${expanded ? renderSessionDetail(s) : ''}
           </div>
         \`;
       }).join('');
+
+      return header + body;
+    }
+
+    // Expanded detail for a session row: a labelled key/value list.
+    function renderSessionDetail(s) {
+      const models = Object.keys(s.models || {});
+      const detail = [
+        ['Date', s.atMs ? new Date(s.atMs).toLocaleString() : '—'],
+        ['Credits', fmtCredits(s.cost)],
+        ['Input', fmtTokens(s.input) + ' tokens'],
+        ['Output', fmtTokens(s.output) + ' tokens'],
+        ['Cache write', fmtTokens(s.cacheCreation) + ' tokens'],
+        ['Cache read', fmtTokens(s.cacheRead) + ' tokens'],
+        ['Source', s.source === 'cli' ? 'CLI' : 'Chat'],
+        ['Repo', s.repo || '—'],
+        ['Model', models.length ? models.join(', ') : '—'],
+        ['Session', s.shortId],
+      ];
+      return '<div class="session-detail">' + detail.map(kv => \`
+        <div class="session-detail-row">
+          <span class="session-detail-key">\${esc(kv[0])}</span>
+          <span class="session-detail-val">\${esc(kv[1])}</span>
+        </div>
+      \`).join('') + '</div>';
     }
 
     // Daily usage line chart. viewBox height == rendered height so the hover
@@ -1435,10 +1554,10 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       \`;
 
       const metricOpt = (v, label) => \`<option value="\${v}"\${sessionMetric === v ? ' selected' : ''}>\${label}</option>\`;
-      const orderTitle = sessionOrder === 'asc' ? 'Lowest first — click for highest' : 'Highest first — click for lowest';
       const sessionRange = rangeLabel(sessionWindow, sessionCustomStartMs, sessionCustomEndMs);
       const sessionEmptyMsg = sessionWindow === 'custom' ? 'No session data for this range.' : 'No session data for this period.';
-      // Sort controls (left) and the date-range filter (top-right) share one row.
+      // Metric picker (left) and the date-range filter (top-right) share one row;
+      // sorting is driven by the clickable column headers in the list below.
       const sessionsHtml = \`
         <div class="session-controls">
           <select class="session-select">
@@ -1446,7 +1565,6 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
             \${metricOpt('input', 'Input')}
             \${metricOpt('output', 'Output')}
           </select>
-          <button class="session-order-btn" data-session-order title="\${orderTitle}" aria-label="\${orderTitle}">\${sessionOrder === 'asc' ? '↑' : '↓'}</button>
           <div class="kpi-filter">
             \${sessionWindow === 'custom'
               ? customRangeHtml(sessionWindow, sessionCustomStartMs, sessionCustomEndMs, 'sessions')
@@ -1458,7 +1576,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         </div>
         \${statsSession.empty
           ? \`<div class="section-empty">\${sessionEmptyMsg}</div>\`
-          : \`<div class="session-list">\${renderSessionList(statsSession.sessions, sessionMetric, sessionOrder)}</div>\`}
+          : \`<div class="session-list">\${renderSessionList(statsSession.sessions, sessionMetric)}</div>\`}
       \`;
 
       const sessionsSection = \`
@@ -1544,8 +1662,26 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     }, true);
 
     root.addEventListener('click', e => {
-      if (e.target.closest('[data-session-order]')) {
-        sessionOrder = sessionOrder === 'asc' ? 'desc' : 'asc';
+      const th = e.target.closest('[data-sort]');
+      if (th) {
+        const col = th.dataset.sort;
+        if (sessionSort === col) {
+          sessionOrder = sessionOrder === 'asc' ? 'desc' : 'asc';
+        } else {
+          sessionSort = col;
+          // Text columns read best A→Z; date/value default to largest-first.
+          sessionOrder = (col === 'title' || col === 'source') ? 'asc' : 'desc';
+        }
+        saveUiState();
+        render(lastData);
+        return;
+      }
+
+      const srow = e.target.closest('.session-row');
+      if (srow && srow.dataset.sessionId != null) {
+        const id = srow.dataset.sessionId;
+        if (expandedSessions.has(id)) expandedSessions.delete(id);
+        else expandedSessions.add(id);
         saveUiState();
         render(lastData);
         return;
