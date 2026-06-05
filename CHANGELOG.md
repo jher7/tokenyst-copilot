@@ -12,6 +12,10 @@ Section guide (omit any that are empty for a release):
 
 <!-- ## [Unreleased] -->
 
+## [0.5.2] - 2026-06-05
+### Fixed
+- Collapse/Expand All control not working as expected.
+
 ## [0.5.1] - 2026-06-05
 ### Changed
 - Update demo screenshots in README.
