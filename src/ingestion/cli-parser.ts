@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { resolveModel, calculateCost, CREDITS_PER_USD } from '../core/pricing';
+import { toTitle } from './chat-parser';
 
 /**
  * Per-session, per-model usage aggregated from a GitHub Copilot **CLI** session.
@@ -29,6 +30,8 @@ export interface CliSessionUsage {
   timestamp: string;
   externalId: string;
   repo?: string;
+  /** Human-readable session title: the session's first user prompt (truncated). */
+  title?: string;
 }
 
 export interface CliSessionFile {
@@ -143,6 +146,9 @@ export function parseCliSession(file: string, sessionId: string): CliSessionUsag
 
   const perModel = new Map<string, ModelAcc>();
   const times: number[] = [];
+  // The first user prompt (`user.message.data.content`) doubles as the session
+  // title — the CLI's clean prompt text, before system-reminder transforms.
+  let firstPrompt: string | undefined;
 
   for (const event of readJsonl(file)) {
     if (!isObj(event)) continue;
@@ -150,6 +156,11 @@ export function parseCliSession(file: string, sessionId: string): CliSessionUsag
     if (typeof ts === 'string') {
       const ms = Date.parse(ts);
       if (Number.isFinite(ms)) times.push(ms);
+    }
+    if (firstPrompt === undefined && event['type'] === 'user.message') {
+      const d = isObj(event['data']) ? (event['data'] as AnyObj) : undefined;
+      const content = d && typeof d['content'] === 'string' ? (d['content'] as string).trim() : '';
+      if (content) firstPrompt = content;
     }
     if (event['type'] !== 'session.shutdown') continue;
 
@@ -184,6 +195,7 @@ export function parseCliSession(file: string, sessionId: string): CliSessionUsag
 
   const timestamp = times.length > 0 ? new Date(Math.max(...times)).toISOString() : new Date().toISOString();
   const repo = readRepo(sessionId);
+  const title = toTitle(firstPrompt);
 
   const result: CliSessionUsage[] = [];
   for (const [model, acc] of perModel) {
@@ -213,6 +225,7 @@ export function parseCliSession(file: string, sessionId: string): CliSessionUsag
       timestamp,
       externalId: `copilot-cli-${sessionId}-${model}`,
       repo,
+      title,
     });
   }
   return result;

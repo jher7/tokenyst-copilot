@@ -12,6 +12,16 @@ Section guide (omit any that are empty for a release):
 
 <!-- ## [Unreleased] -->
 
+## [0.5.0] - 2026-06-05
+### Added
+- **Sessions panel**: a new section that lists usage per individual chat/CLI session. Click any row to expand a detail view.
+- **Token breakdown**: totals for input, output, cache-write and cache-read tokens, plus a cache-reuse percentage, to show what's driving spend.
+- **Optimization insights**: suggestion cards based on your usage patterns: low cache reuse, model hotspot, repo hotspot, and expensive-but-low-output sessions.
+- Metric breakdown sections are now collapsible.
+
+### Changed
+- Breakdown bar charts use a wider label column.
+
 ## [0.4.0] - 2026-06-04
 ### Fixed
 - Enabling Copilot tracking inside a **dev container** no longer fails with "No Copilot Chat session files found." Tokenyst now runs on the host by default, where VS Code stores Copilot Chat sessions, so Chat usage from dev containers (and WSL, SSH, Codespaces) is tracked automatically. No need to install it in the remote.

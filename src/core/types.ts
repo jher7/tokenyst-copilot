@@ -31,4 +31,8 @@ export interface SessionResult {
   source?: UsageSource;
   /** ISO timestamp of the event; defaults to now when omitted (live sync). */
   at?: string;
+  /** Stable session identifier (the chat/CLI session this usage belongs to). */
+  sessionId?: string;
+  /** Human-readable session title (chat: first user prompt). Absent for CLI. */
+  title?: string;
 }

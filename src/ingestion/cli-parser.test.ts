@@ -127,6 +127,19 @@ describe('parseCliSession', () => {
     expect(rec.costUsd).toBeCloseTo(expected, 10);
   });
 
+  it('scrapes the first user.message content as the session title', () => {
+    const id = 'sess-titled';
+    const file = writeSession(id, [
+      JSON.stringify({ type: 'session.start', timestamp: '2026-05-28T14:41:35.702Z', data: {} }),
+      // The clean prompt is in data.content; transformedContent (with system reminders) is ignored.
+      JSON.stringify({ type: 'user.message', timestamp: '2026-05-28T14:41:36.081Z',
+        data: { content: 'Refactor the ingestion pipeline', transformedContent: '<sys>noise</sys>\nRefactor the ingestion pipeline' } }),
+      shutdown({ 'gpt-5-mini': model({ inputTokens: 1000, outputTokens: 100 }, 100_000_000) }, '2026-05-28T14:41:44.798Z'),
+    ]);
+    const [rec] = parseCliSession(file, id);
+    expect(rec.title).toBe('Refactor the ingestion pipeline');
+  });
+
   it('returns [] for a file with no shutdown/usage events', () => {
     const file = writeSession('sess-empty', [
       JSON.stringify({ type: 'session.start', timestamp: '2026-05-28T14:41:35.702Z', data: {} }),

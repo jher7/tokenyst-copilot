@@ -7,22 +7,21 @@ Tokenyst is **strictly local**. It reads Copilot's own session files on your mac
 
 <table>
   <tr>
-    <td width="33%">
-       <img src="https://raw.githubusercontent.com/jher7/tokenyst-copilot/master/resources/screenshots/screen-1.png" width="100%" alt="Usage Stats">
-    </td>
-    <td width="33%">
-      <img src="https://raw.githubusercontent.com/jher7/tokenyst-copilot/master/resources/screenshots/screen-2.png" width="100%" alt="Breakdown">
-    </td>
-    <td width="33%">
-      <img src="https://raw.githubusercontent.com/jher7/tokenyst-copilot/master/resources/screenshots/screen-3.png" width="100%" alt="Full View">
-    </td>
+    <td align="center" width="32%"><img src="https://raw.githubusercontent.com/jher7/tokenyst-copilot/master/resources/screenshots/screen-1.jpg" alt="Usage Stats"></td>
+    <td width="2%"></td>
+    <td align="center" width="32%"><img src="https://raw.githubusercontent.com/jher7/tokenyst-copilot/master/resources/screenshots/screen-2.jpg" alt="Breakdown"></td>
+    <td width="2%"></td>
+    <td align="center" width="32%"><img src="https://raw.githubusercontent.com/jher7/tokenyst-copilot/master/resources/screenshots/screen-3.jpg" alt="Sessions"></td>
   </tr>
   <tr>
     <td align="center"><strong>Usage Stats</strong></td>
+    <td></td>
     <td align="center"><strong>Breakdown</strong></td>
-    <td align="center"><strong>Full View</strong></td>
+    <td></td>
+    <td align="center"><strong>Sessions</strong></td>
   </tr>
 </table>
+
 
 ## Features
 
@@ -30,7 +29,9 @@ Tokenyst is **strictly local**. It reads Copilot's own session files on your mac
   - A monthly budget card showing spend vs. your cap
   - Today / This Week and Avg Daily / Weekly KPIs (with a period filter)
   - A pace projection for the current billing period
-  - Bar charts broken down by day of week, model, source (Chat vs CLI), and repo
+  - Collapsible breakdowns by day of week, model, **token type** (input / output / cache, with a cache-reuse %), source (Chat vs CLI), and repo — each foldable individually, with an Expand all / Collapse all toggle
+- **Session breakdown** — a sortable list of your individual Chat and CLI sessions, each with a readable title (its first prompt), so you can pinpoint your most expensive sessions. Sort by date, source, title, or your chosen metric (credits, input, or output tokens); filter by an independent date range; and click any session to expand a detail view (tokens, cache, model, repo)
+- **Optimization insights** — automatic, colour-coded tips based on your usage patterns: low cache reuse, model and repo hotspots, and expensive-but-low-output sessions
 - **Two sources, one budget** — tracks both Copilot Chat and the Copilot CLI, combined into a single monthly total (matching GitHub's shared usage-based billing), with a **By source** breakdown so you can see how much came from each
 - **Status bar indicator** — live `$(graph) N cr` of credits spent this period
 - **Budget periods** — calendar month by default, or anchored to your plan's renewal day
@@ -43,11 +44,13 @@ Tokenyst is **strictly local**. It reads Copilot's own session files on your mac
 Tokenyst reads from two local sources and combines them into one budget:
 
 **Copilot Chat**
+
 1. The VS Code Copilot Chat extension records each chat session under `<VS Code User>/workspaceStorage/<workspace>/chatSessions/`.
 2. Tokenyst watches those files and aggregates usage per session and model, reading the **real** token counts (`promptTokens`/`completionTokens`) that Copilot records on each completed request. Where GitHub records a real credit value for a request, Tokenyst uses it directly.
 3. The input counts are context-inclusive (system prompt, tool definitions, attached files, and conversation history), so they reflect what Copilot actually sends — not just your typed message.
 
 **Copilot CLI**
+
 4. The GitHub Copilot CLI records each session under `~/.copilot/session-state/<session>/events.jsonl`.
 5. Tokenyst watches those logs and reads the **real** AI-credit cost the CLI records for each model (the same "AI Credits" the CLI prints when it exits), so CLI spend matches GitHub exactly. Token counts are kept for transparency.
 

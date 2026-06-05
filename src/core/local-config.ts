@@ -31,6 +31,11 @@ export interface LocalAllocation {
   /** Copilot surface (chat vs cli) this allocation came from. Absent on legacy
    * entries — use `allocationSource()` to classify those. */
   source?: UsageSource;
+  /** Stable session identifier (the chat/CLI session). Absent on legacy entries —
+   * fall back to parsing the `externalId` for those. */
+  sessionId?: string;
+  /** Human-readable session title (chat: first user prompt). Absent for CLI/legacy. */
+  title?: string;
 }
 
 /** Unit used to display amounts in the UI. Cost is always stored in USD. */
@@ -85,6 +90,8 @@ function normalizeAllocation(a: unknown): LocalAllocation {
     repo: raw.repo != null ? String(raw.repo) : undefined,
     manual: raw.manual === true ? true : undefined,
     source: raw.source === 'cli' || raw.source === 'chat' ? raw.source : undefined,
+    sessionId: raw.sessionId != null ? String(raw.sessionId) : undefined,
+    title: raw.title != null ? String(raw.title) : undefined,
   };
 }
 
@@ -307,6 +314,8 @@ export async function upsertCopilotSessionAllocation(
       existing.filesModified = session.filesModified;
       existing.repo = session.repo;
       if (session.source) existing.source = session.source;
+      if (session.sessionId) existing.sessionId = session.sessionId;
+      if (session.title) existing.title = session.title;
       if (session.at) existing.at = session.at;
       return { success: true, inserted: false };
     }
@@ -324,6 +333,8 @@ export async function upsertCopilotSessionAllocation(
       externalId: session.externalId,
       repo: session.repo,
       source: session.source,
+      sessionId: session.sessionId,
+      title: session.title,
     });
     return { success: true, inserted: true };
   });
