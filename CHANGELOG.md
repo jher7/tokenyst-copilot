@@ -12,6 +12,10 @@ Section guide (omit any that are empty for a release):
 
 <!-- ## [Unreleased] -->
 
+## [0.5.1] - 2026-06-05
+### Changed
+- Update demo screenshots in README.
+
 ## [0.5.0] - 2026-06-05
 ### Added
 - **Sessions panel**: a new section that lists usage per individual chat/CLI session. Click any row to expand a detail view.
