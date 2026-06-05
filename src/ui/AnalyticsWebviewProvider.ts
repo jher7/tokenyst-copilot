@@ -442,9 +442,12 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     /* Bar rows */
     .bar-row {
       display: grid;
-      /* Cap the bar track so it doesn't span the full panel; the value column
-         (1fr, right-aligned) absorbs the remaining width and stays at the edge. */
-      grid-template-columns: 72px minmax(0, 170px) 1fr;
+      /* Wider label column so longer names (e.g. "claude-sonnet-4.6") aren't
+         truncated early; the bar track (1fr) stretches with the panel width. The
+         value column is a FIXED width (each row is its own grid) so every bar ends
+         at the same point and is the same length; the 6px gap is the fixed padding
+         between the bar and the value. */
+      grid-template-columns: 100px minmax(0, 1fr) 76px;
       align-items: center;
       gap: 6px;
       margin-bottom: 5px;
@@ -472,6 +475,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       color: var(--vscode-descriptionForeground);
       text-align: right;
       font-family: monospace;
+      white-space: nowrap;
     }
 
     /* Sessions list */
