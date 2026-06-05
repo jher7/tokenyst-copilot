@@ -272,10 +272,16 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     details.chart-section .chart-body { padding: 0 12px 10px; }
 
     /* Expand/collapse-all control above the Breakdown sub-sections. */
+    .breakdown-divider {
+      border: none;
+      border-top: 1px solid var(--vscode-sideBarSectionHeader-border, rgba(128,128,128,0.15));
+      margin: 0;
+    }
     .breakdown-tools {
       display: flex;
       justify-content: flex-end;
-      padding: 6px 12px 0;
+      gap: 8px;
+      padding: 6px 12px 6px;
       margin-bottom: -4px;
     }
     .breakdown-toggle-all {
@@ -353,6 +359,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     }
 
     /* Daily usage line chart */
+    .chart-section:not([open]) .usage-peak { display: none; }
     .usage-peak {
       margin-left: auto;
       text-transform: none;
@@ -1618,12 +1625,11 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         ].filter(r => r.value > 0), fmtTokens)}
         <div style="padding:2px 0;color:var(--vscode-descriptionForeground);font-size:11px">Cache reuse: \${(statsBreak.cacheReusePct * 100).toFixed(0)}%</div>
       \`;
-      // Offer "Collapse all" only when every section is already open; otherwise
-      // "Expand all" (so opening one section doesn't flip the control's meaning).
-      const allExpanded = BREAKDOWN_SUBSECTIONS.every(id => !breakdownCollapsed[id]);
       const breakdownHtml = statsBreak.empty ? \`<div class="section-empty">\${emptyMsg}</div>\` : \`
+        <hr class="breakdown-divider">
         <div class="breakdown-tools">
-          <span class="breakdown-toggle-all" data-breakdown-toggle>\${allExpanded ? 'Collapse all' : 'Expand all'}</span>
+          <span class="breakdown-toggle-all" data-breakdown-expand>Expand all</span>
+          <span class="breakdown-toggle-all" data-breakdown-collapse>Collapse all</span>
         </div>
         \${renderUsageChart(statsBreak.daily)}
         \${statsBreak.insights && statsBreak.insights.length ? sub('insights', 'Insights', insightsBody) : ''}
@@ -1775,12 +1781,14 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     }, true);
 
     root.addEventListener('click', e => {
-      // Expand/collapse every Breakdown sub-section at once. Collapse all only when
-      // every section is already open; otherwise expand all. (Mirrors the label, and
-      // is safe to re-render from a click handler.)
-      if (e.target.closest('[data-breakdown-toggle]')) {
-        const collapseAll = BREAKDOWN_SUBSECTIONS.every(id => !breakdownCollapsed[id]);
-        for (const id of BREAKDOWN_SUBSECTIONS) breakdownCollapsed[id] = collapseAll;
+      if (e.target.closest('[data-breakdown-expand]')) {
+        for (const id of BREAKDOWN_SUBSECTIONS) breakdownCollapsed[id] = false;
+        saveUiState();
+        render(lastData);
+        return;
+      }
+      if (e.target.closest('[data-breakdown-collapse]')) {
+        for (const id of BREAKDOWN_SUBSECTIONS) breakdownCollapsed[id] = true;
         saveUiState();
         render(lastData);
         return;
