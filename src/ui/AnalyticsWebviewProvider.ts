@@ -180,6 +180,44 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       margin-bottom: 6px;
     }
 
+    /* Insight cards — colour-coded by severity with an icon + title + body. */
+    .insights-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .insight {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      padding: 8px 10px;
+      border-radius: 4px;
+      background: var(--vscode-textBlockQuote-background, rgba(128,128,128,0.08));
+      border-left: 3px solid var(--vscode-descriptionForeground);
+    }
+    .insight--warn { border-left-color: var(--vscode-editorWarning-foreground, #cca700); }
+    .insight--info { border-left-color: var(--vscode-charts-blue, var(--vscode-terminal-ansiBlue, #3794ff)); }
+    .insight--good { border-left-color: var(--vscode-charts-green, var(--vscode-terminal-ansiGreen, #89d185)); }
+    .insight-icon {
+      font-size: 13px;
+      line-height: 1.3;
+      flex-shrink: 0;
+      color: var(--vscode-descriptionForeground);
+    }
+    .insight--warn .insight-icon { color: var(--vscode-editorWarning-foreground, #cca700); }
+    .insight--info .insight-icon { color: var(--vscode-charts-blue, var(--vscode-terminal-ansiBlue, #3794ff)); }
+    .insight--good .insight-icon { color: var(--vscode-charts-green, var(--vscode-terminal-ansiGreen, #89d185)); }
+    .insight-title {
+      font-size: 11px;
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+    .insight-body {
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground);
+      line-height: 1.4;
+    }
+
     /* Collapsible top-level sections */
     .panel-section {
       border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, rgba(128,128,128,0.15));
@@ -424,6 +462,17 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
        top, window <select> below it. */
     .session-controls .kpi-filter {
       margin-left: auto;
+    }
+    /* Metric picker with a row count beneath it. */
+    .session-metric-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .session-count {
+      font-size: 10px;
+      color: var(--vscode-descriptionForeground);
+      margin-left: 3px;
     }
     .session-select {
       background: var(--vscode-dropdown-background, transparent);
@@ -911,20 +960,29 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       const cacheBase = tokenTotals.cacheRead + tokenTotals.cacheCreation + tokenTotals.input;
       const cacheReusePct = cacheBase > 0 ? tokenTotals.cacheRead / cacheBase : 0;
 
-      // Optimization insights — short heuristic hints. Thresholds are tunable.
+      // Optimization insights — short heuristic hints. Each is a structured card
+      // ({ tone, icon, title, body }) so the UI can style by severity. Thresholds
+      // are tunable.
       const LOW_CACHE_REUSE = 0.15, HOTSPOT_SHARE = 0.70, EXPENSIVE_FACTOR = 2;
       const insights = [];
       if (cacheBase > 0 && cacheReusePct < LOW_CACHE_REUSE) {
-        insights.push('Low cache reuse (' + (cacheReusePct * 100).toFixed(0) +
-          '%) — repeated context is being re-sent instead of served from cache.');
+        insights.push({
+          tone: 'warn', icon: '⟳', title: 'Low cache reuse',
+          body: 'Only ' + (cacheReusePct * 100).toFixed(0) + '% of input is served from cache — ' +
+            'repeated context is being re-sent instead of cached.',
+        });
       }
       if (byModel.length && byModel[0].value / totalSpent >= HOTSPOT_SHARE) {
-        insights.push(byModel[0].label + ' drives ' +
-          (byModel[0].value / totalSpent * 100).toFixed(0) + '% of spend.');
+        insights.push({
+          tone: 'info', icon: '◆', title: 'Model hotspot',
+          body: byModel[0].label + ' drives ' + (byModel[0].value / totalSpent * 100).toFixed(0) + '% of spend.',
+        });
       }
       if (byRepo.length && byRepo[0].value / totalSpent >= HOTSPOT_SHARE) {
-        insights.push(byRepo[0].label + ' accounts for ' +
-          (byRepo[0].value / totalSpent * 100).toFixed(0) + '% of spend.');
+        insights.push({
+          tone: 'info', icon: '❖', title: 'Repo hotspot',
+          body: byRepo[0].label + ' accounts for ' + (byRepo[0].value / totalSpent * 100).toFixed(0) + '% of spend.',
+        });
       }
       const ratios = sessions.filter(s => s.output > 0).map(s => s.cost / (s.output / 1000));
       if (ratios.length >= 3) {
@@ -933,8 +991,11 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         const top = sessions.slice().sort((a, b) => b.cost - a.cost)[0];
         if (top && top.output > 0 && median > 0 &&
             top.cost / (top.output / 1000) > median * EXPENSIVE_FACTOR) {
-          insights.push('"' + top.label + '" spends a lot relative to its output — ' +
-            'consider a smaller model or a tighter prompt.');
+          insights.push({
+            tone: 'warn', icon: '⚠', title: 'Expensive session',
+            body: '“' + top.label + '” spends a lot relative to its output — ' +
+              'consider a smaller model or a tighter prompt.',
+          });
         }
       }
       const insightsTop = insights.slice(0, 3);
@@ -1495,7 +1556,17 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         \${statsBreak.insights && statsBreak.insights.length ? \`
         <div class="chart-section">
           <div class="section-label">Insights</div>
-          \${statsBreak.insights.map(t => \`<div style="padding:2px 0;color:var(--vscode-descriptionForeground);font-size:11px;line-height:1.4">• \${esc(t)}</div>\`).join('')}
+          <div class="insights-list">
+            \${statsBreak.insights.map(i => \`
+              <div class="insight insight--\${i.tone}">
+                <span class="insight-icon">\${esc(i.icon)}</span>
+                <div class="insight-text">
+                  <div class="insight-title">\${esc(i.title)}</div>
+                  <div class="insight-body">\${esc(i.body)}</div>
+                </div>
+              </div>
+            \`).join('')}
+          </div>
         </div>
         \` : ''}
 
@@ -1556,15 +1627,20 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       const metricOpt = (v, label) => \`<option value="\${v}"\${sessionMetric === v ? ' selected' : ''}>\${label}</option>\`;
       const sessionRange = rangeLabel(sessionWindow, sessionCustomStartMs, sessionCustomEndMs);
       const sessionEmptyMsg = sessionWindow === 'custom' ? 'No session data for this range.' : 'No session data for this period.';
+      const sessionPick = SESSION_METRIC_VALUE[sessionMetric] || SESSION_METRIC_VALUE.credits;
+      const sessionCount = statsSession.empty ? 0 : (statsSession.sessions || []).filter(s => sessionPick(s) > 0).length;
       // Metric picker (left) and the date-range filter (top-right) share one row;
       // sorting is driven by the clickable column headers in the list below.
       const sessionsHtml = \`
         <div class="session-controls">
-          <select class="session-select">
-            \${metricOpt('credits', 'Credits')}
-            \${metricOpt('input', 'Input')}
-            \${metricOpt('output', 'Output')}
-          </select>
+          <div class="session-metric-group">
+            <select class="session-select">
+              \${metricOpt('credits', 'Credits')}
+              \${metricOpt('input', 'Input')}
+              \${metricOpt('output', 'Output')}
+            </select>
+            <span class="session-count">\${sessionCount} \${sessionCount === 1 ? 'session' : 'sessions'}</span>
+          </div>
           <div class="kpi-filter">
             \${sessionWindow === 'custom'
               ? customRangeHtml(sessionWindow, sessionCustomStartMs, sessionCustomEndMs, 'sessions')
