@@ -43,11 +43,13 @@ Tokenyst is **strictly local**. It reads Copilot's own session files on your mac
 Tokenyst reads from two local sources and combines them into one budget:
 
 **Copilot Chat**
+
 1. The VS Code Copilot Chat extension records each chat session under `<VS Code User>/workspaceStorage/<workspace>/chatSessions/`.
 2. Tokenyst watches those files and aggregates usage per session and model, reading the **real** token counts (`promptTokens`/`completionTokens`) that Copilot records on each completed request. Where GitHub records a real credit value for a request, Tokenyst uses it directly.
 3. The input counts are context-inclusive (system prompt, tool definitions, attached files, and conversation history), so they reflect what Copilot actually sends — not just your typed message.
 
 **Copilot CLI**
+
 4. The GitHub Copilot CLI records each session under `~/.copilot/session-state/<session>/events.jsonl`.
 5. Tokenyst watches those logs and reads the **real** AI-credit cost the CLI records for each model (the same "AI Credits" the CLI prints when it exits), so CLI spend matches GitHub exactly. Token counts are kept for transparency.
 

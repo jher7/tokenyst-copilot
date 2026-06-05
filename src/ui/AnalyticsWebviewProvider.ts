@@ -410,6 +410,87 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       font-family: monospace;
     }
 
+    /* Sessions list */
+    .session-controls {
+      display: flex;
+      /* Top-align so the metric dropdown / order button sit at the top, level with
+         the range label atop the (taller, two-line) date-range filter. */
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, rgba(128,128,128,0.15));
+    }
+    /* Date-range filter sits at the top-right of the controls row: range label on
+       top, window <select> below it. */
+    .session-controls .kpi-filter {
+      margin-left: auto;
+    }
+    .session-select {
+      background: var(--vscode-dropdown-background, transparent);
+      color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+      border: 1px solid var(--vscode-dropdown-border, rgba(128,128,128,0.3));
+      border-radius: 3px;
+      font-size: 11px;
+      font-family: inherit;
+      padding: 2px 4px;
+      cursor: pointer;
+      outline: none;
+    }
+    .session-select option {
+      background: var(--vscode-dropdown-background, #1e1e1e);
+      color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+    }
+    .session-order-btn {
+      background: none;
+      border: 1px solid var(--vscode-dropdown-border, rgba(128,128,128,0.3));
+      color: var(--vscode-foreground);
+      border-radius: 3px;
+      font-size: 15px;
+      line-height: 1;
+      font-family: inherit;
+      padding: 3px 7px;
+      cursor: pointer;
+      opacity: 0.7;
+    }
+    .session-order-btn:hover {
+      background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.2));
+      opacity: 1;
+    }
+    .session-list {
+      padding: 4px 12px 10px;
+    }
+    .session-row {
+      padding: 8px 0;
+    }
+    .session-row + .session-row {
+      border-top: 1px solid var(--vscode-sideBarSectionHeader-border, rgba(128,128,128,0.08));
+    }
+    .session-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .session-title {
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .session-value {
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground);
+      font-family: monospace;
+      white-space: nowrap;
+    }
+    .session-track {
+      height: 6px;
+      background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.2));
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
     /* Pace section */
     .pace-projected {
       font-size: 18px;
@@ -508,11 +589,24 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     let breakdownWindow = persisted.breakdownWindow ?? 0;
     let budgetOpen = persisted.budgetOpen ?? true;
     let breakdownOpen = persisted.breakdownOpen ?? false;
+    let sessionsOpen = persisted.sessionsOpen ?? false;
+    // Sessions list controls: metric to sort by, sort direction, and an
+    // independent date-range window (mirrors the Breakdown filter). Defaults to
+    // all time so every session is visible without changing the period.
+    let sessionMetric = persisted.sessionMetric ?? 'credits'; // 'credits' | 'input' | 'output'
+    let sessionOrder = persisted.sessionOrder ?? 'desc';      // 'desc' | 'asc'
+    let sessionWindow = persisted.sessionWindow ?? 0;         // 'month' | 'last' | 0 | 'custom'
+    let sessionCustomStartMs = persisted.sessionCustomStartMs ?? null;
+    let sessionCustomEndMs = persisted.sessionCustomEndMs ?? null;
     // Custom range bounds (ms), local day boundaries. Null until the user sets them.
     let customStartMs = persisted.customStartMs ?? null;
     let customEndMs = persisted.customEndMs ?? null;
     function saveUiState() {
-      vscode.setState({ breakdownWindow, budgetOpen, breakdownOpen, customStartMs, customEndMs });
+      vscode.setState({
+        breakdownWindow, budgetOpen, breakdownOpen, sessionsOpen,
+        sessionMetric, sessionOrder, sessionWindow, sessionCustomStartMs, sessionCustomEndMs,
+        customStartMs, customEndMs,
+      });
     }
     // Billing-period boundaries (ms), supplied by the extension host. Null until first update.
     let periodStartMs = null;
@@ -600,7 +694,9 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     // Resolve a window selector to a date range. Returns inclusive-start /
     // exclusive-end ms bounds, the last day to draw on the chart axis, and a
     // fixed elapsed-day count for fixed-length windows (null = derive from data).
-    function resolveRange(win) {
+    function resolveRange(win, cStart, cEnd) {
+      cStart = cStart === undefined ? customStartMs : cStart;
+      cEnd = cEnd === undefined ? customEndMs : cEnd;
       if (win === 'month') {
         let start = periodStartMs;
         if (start == null) {
@@ -617,19 +713,19 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         };
       }
       if (win === 'custom') {
-        if (customStartMs == null || customEndMs == null) return { startMs: null };
-        const end = customEndMs + 1; // customEndMs is end-of-day inclusive
+        if (cStart == null || cEnd == null) return { startMs: null };
+        const end = cEnd + 1; // cEnd is end-of-day inclusive
         return {
-          startMs: customStartMs, endMs: end, axisEndMs: Math.min(customEndMs, Date.now()),
-          elapsedDays: Math.max(1, (Math.min(end, Date.now()) - customStartMs) / 86400000),
+          startMs: cStart, endMs: end, axisEndMs: Math.min(cEnd, Date.now()),
+          elapsedDays: Math.max(1, (Math.min(end, Date.now()) - cStart) / 86400000),
         };
       }
       // all time
       return { startMs: 0, endMs: Infinity, axisEndMs: Date.now(), elapsedDays: null };
     }
 
-    function compute(allocations, win) {
-      const range = resolveRange(win);
+    function compute(allocations, win, cStart, cEnd) {
+      const range = resolveRange(win, cStart, cEnd);
 
       // Today / this week — always absolute, independent of window toggle
       const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
@@ -742,14 +838,6 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         s.output += a.outputTokens || 0;
       }
       const sessions = Object.keys(sessAcc).map(k => sessAcc[k]);
-      const topSessions = (val) => sessions
-        .map(s => ({ label: s.label, value: val(s) }))
-        .filter(r => r.value > 0)
-        .sort((a, b) => b.value - a.value)
-        .slice(0, 8);
-      const topSessionsByCredits = topSessions(s => s.cost);
-      const topSessionsByInput = topSessions(s => s.input);
-      const topSessionsByOutput = topSessions(s => s.output);
 
       // Token totals across the window (treat nulls as 0).
       const tokenTotals = { input: 0, output: 0, cacheCreation: 0, cacheRead: 0 };
@@ -792,8 +880,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
 
       return {
         todaySpent, thisWeekSpent, totalSpent, avgWeekly, avgDaily, avgMonthly,
-        byDayOfWeek, byModel, byRepo, bySource, daily,
-        topSessionsByCredits, topSessionsByInput, topSessionsByOutput,
+        byDayOfWeek, byModel, byRepo, bySource, daily, sessions,
         tokenTotals, cacheReusePct, insights: insightsTop,
       };
     }
@@ -863,6 +950,42 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       if (pct >= 0.9) return 'red';
       if (pct >= 0.7) return 'yellow';
       return 'green';
+    }
+
+    // Sessions list: every session sorted by the chosen metric and direction.
+    // Each item stacks the title over a progress bar (bar width is relative to the
+    // largest value in the list, so the leader reads as a full bar).
+    const SESSION_METRIC_VALUE = {
+      credits: s => s.cost,
+      input: s => s.input,
+      output: s => s.output,
+    };
+    function sessionMetricFmt(metric) {
+      return metric === 'credits' ? fmtCrds : fmtTokens;
+    }
+    function renderSessionList(sessions, metric, order) {
+      const pick = SESSION_METRIC_VALUE[metric] || SESSION_METRIC_VALUE.credits;
+      const fmt = sessionMetricFmt(metric);
+      const rows = (sessions || [])
+        .map(s => ({ label: s.label, value: pick(s) }))
+        .filter(r => r.value > 0)
+        .sort((a, b) => order === 'asc' ? a.value - b.value : b.value - a.value);
+      if (rows.length === 0) return '<div class="section-empty">No session data for this period.</div>';
+      const max = Math.max.apply(null, rows.map(r => r.value));
+      return rows.map(r => {
+        const pct = max > 0 ? (r.value / max * 100).toFixed(1) : '0';
+        return \`
+          <div class="session-row">
+            <div class="session-head">
+              <span class="session-title" title="\${esc(r.label)}">\${esc(r.label)}</span>
+              <span class="session-value">\${esc(fmt(r.value))}</span>
+            </div>
+            <div class="session-track">
+              <div class="bar-fill" data-pct="\${pct}"></div>
+            </div>
+          </div>
+        \`;
+      }).join('');
     }
 
     // Daily usage line chart. viewBox height == rendered height so the hover
@@ -1107,8 +1230,12 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       const statsBreak = compute(allocations || [], breakdownWindow);
       // Pace always reflects the current month, independent of the section filter.
       const statsMonth = breakdownWindow === 'month' ? statsBreak : compute(allocations || [], 'month');
+      // Sessions list uses its own independent window.
+      const statsSession = compute(allocations || [], sessionWindow, sessionCustomStartMs, sessionCustomEndMs);
 
-      function rangeLabel(win) {
+      function rangeLabel(win, cStart, cEnd) {
+        cStart = cStart === undefined ? customStartMs : cStart;
+        cEnd = cEnd === undefined ? customEndMs : cEnd;
         let startMs, endMs;
         if (win === 'month') {
           if (periodStartMs == null) return '';
@@ -1119,9 +1246,9 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
           startMs = lastPeriodStartMs;
           endMs = lastPeriodEndMs;
         } else if (win === 'custom') {
-          if (customStartMs == null || customEndMs == null) return '';
-          startMs = customStartMs;
-          endMs = customEndMs;
+          if (cStart == null || cEnd == null) return '';
+          startMs = cStart;
+          endMs = cEnd;
         } else {
           const times = (allocations || [])
             .filter(a => a.provider === 'copilot')
@@ -1139,16 +1266,21 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         return opt('month', 'This period') + opt('last', 'Last period') + opt('0', 'All time') + opt('custom', 'Custom…');
       }
 
-      // Two date inputs shown only when the custom window is active.
-      function customRangeHtml() {
-        if (breakdownWindow !== 'custom') return '';
-        const s = customStartMs != null ? msToDateInput(customStartMs) : '';
-        const e = customEndMs != null ? msToDateInput(customEndMs) : '';
+      // Two date inputs shown only when the custom window is active. The scope arg
+      // tags which section the inputs belong to so the change handler routes correctly.
+      function customRangeHtml(win, cStart, cEnd, scope) {
+        win = win === undefined ? breakdownWindow : win;
+        cStart = cStart === undefined ? customStartMs : cStart;
+        cEnd = cEnd === undefined ? customEndMs : cEnd;
+        scope = scope || 'breakdown';
+        if (win !== 'custom') return '';
+        const s = cStart != null ? msToDateInput(cStart) : '';
+        const e = cEnd != null ? msToDateInput(cEnd) : '';
         return \`
           <div class="custom-range">
-            <input type="date" class="custom-date" data-custom="start" value="\${s}" aria-label="Start date" />
+            <input type="date" class="custom-date" data-scope="\${scope}" data-custom="start" value="\${s}" aria-label="Start date" />
             <span class="custom-range-sep">–</span>
-            <input type="date" class="custom-date" data-custom="end" value="\${e}" aria-label="End date" />
+            <input type="date" class="custom-date" data-scope="\${scope}" data-custom="end" value="\${e}" aria-label="End date" />
           </div>
         \`;
       }
@@ -1269,23 +1401,6 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
           <div style="padding:2px 0;color:var(--vscode-descriptionForeground);font-size:11px">Cache reuse: \${(statsBreak.cacheReusePct * 100).toFixed(0)}%</div>
         </div>
 
-        \${statsBreak.topSessionsByCredits && statsBreak.topSessionsByCredits.length ? \`
-        <div class="chart-section">
-          <div class="section-label">Top sessions · credits</div>
-          \${renderBars(statsBreak.topSessionsByCredits)}
-        </div>
-
-        <div class="chart-section">
-          <div class="section-label">Top sessions · input tokens</div>
-          \${renderBars(statsBreak.topSessionsByInput, fmtTokens)}
-        </div>
-
-        <div class="chart-section">
-          <div class="section-label">Top sessions · output tokens</div>
-          \${renderBars(statsBreak.topSessionsByOutput, fmtTokens)}
-        </div>
-        \` : ''}
-
         \${statsBreak.bySource && statsBreak.bySource.length > 1 ? \`
         <div class="chart-section">
           <div class="section-label">By source</div>
@@ -1319,7 +1434,41 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         </details>
       \`;
 
-      root.innerHTML = trackingBar + budgetSection + breakdownSection;
+      const metricOpt = (v, label) => \`<option value="\${v}"\${sessionMetric === v ? ' selected' : ''}>\${label}</option>\`;
+      const orderTitle = sessionOrder === 'asc' ? 'Lowest first — click for highest' : 'Highest first — click for lowest';
+      const sessionRange = rangeLabel(sessionWindow, sessionCustomStartMs, sessionCustomEndMs);
+      const sessionEmptyMsg = sessionWindow === 'custom' ? 'No session data for this range.' : 'No session data for this period.';
+      // Sort controls (left) and the date-range filter (top-right) share one row.
+      const sessionsHtml = \`
+        <div class="session-controls">
+          <select class="session-select">
+            \${metricOpt('credits', 'Credits')}
+            \${metricOpt('input', 'Input')}
+            \${metricOpt('output', 'Output')}
+          </select>
+          <button class="session-order-btn" data-session-order title="\${orderTitle}" aria-label="\${orderTitle}">\${sessionOrder === 'asc' ? '↑' : '↓'}</button>
+          <div class="kpi-filter">
+            \${sessionWindow === 'custom'
+              ? customRangeHtml(sessionWindow, sessionCustomStartMs, sessionCustomEndMs, 'sessions')
+              : (sessionRange ? \`<span class="filter-range">\${esc(sessionRange)}</span>\` : '')}
+            <select class="filter-select" data-filter="sessions">
+              \${windowOptions(sessionWindow)}
+            </select>
+          </div>
+        </div>
+        \${statsSession.empty
+          ? \`<div class="section-empty">\${sessionEmptyMsg}</div>\`
+          : \`<div class="session-list">\${renderSessionList(statsSession.sessions, sessionMetric, sessionOrder)}</div>\`}
+      \`;
+
+      const sessionsSection = \`
+        <details class="panel-section" data-section="sessions" \${sessionsOpen ? 'open' : ''}>
+          <summary>Sessions</summary>
+          \${sessionsHtml}
+        </details>
+      \`;
+
+      root.innerHTML = trackingBar + budgetSection + breakdownSection + sessionsSection;
 
       applyBarWidths();
       wireUsageChart(statsBreak.daily);
@@ -1332,15 +1481,32 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     }
 
     root.addEventListener('change', e => {
+      const ssel = e.target.closest('.session-select');
+      if (ssel) {
+        sessionMetric = ssel.value;
+        saveUiState();
+        render(lastData);
+        return;
+      }
+
       const sel = e.target.closest('.filter-select');
       if (sel) {
-        breakdownWindow = sel.value === '0' ? 0 : sel.value;
+        const win = sel.value === '0' ? 0 : sel.value;
         // Seed a sensible default range (last 30 days) the first time Custom is chosen.
-        if (breakdownWindow === 'custom' && (customStartMs == null || customEndMs == null)) {
-          const end = new Date(); end.setHours(23, 59, 59, 999);
-          const start = new Date(); start.setDate(start.getDate() - 29); start.setHours(0, 0, 0, 0);
-          customStartMs = start.getTime();
-          customEndMs = end.getTime();
+        const seedCustom = (s, en) => {
+          if (win === 'custom' && (s == null || en == null)) {
+            const end = new Date(); end.setHours(23, 59, 59, 999);
+            const start = new Date(); start.setDate(start.getDate() - 29); start.setHours(0, 0, 0, 0);
+            return [start.getTime(), end.getTime()];
+          }
+          return [s, en];
+        };
+        if (sel.dataset.filter === 'sessions') {
+          sessionWindow = win;
+          [sessionCustomStartMs, sessionCustomEndMs] = seedCustom(sessionCustomStartMs, sessionCustomEndMs);
+        } else {
+          breakdownWindow = win;
+          [customStartMs, customEndMs] = seedCustom(customStartMs, customEndMs);
         }
         saveUiState();
         render(lastData);
@@ -1349,13 +1515,18 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
 
       const dateInput = e.target.closest('.custom-date');
       if (dateInput && dateInput.value) {
-        if (dateInput.dataset.custom === 'start') customStartMs = dateInputToMs(dateInput.value, false);
-        else customEndMs = dateInputToMs(dateInput.value, true);
+        const sessions = dateInput.dataset.scope === 'sessions';
+        const ms = dateInputToMs(dateInput.value, dateInput.dataset.custom === 'end');
+        let start = sessions ? sessionCustomStartMs : customStartMs;
+        let end = sessions ? sessionCustomEndMs : customEndMs;
+        if (dateInput.dataset.custom === 'start') start = ms; else end = ms;
         // Keep start ≤ end by snapping the other bound to the edited day.
-        if (customStartMs != null && customEndMs != null && customStartMs > customEndMs) {
-          if (dateInput.dataset.custom === 'start') customEndMs = dateInputToMs(dateInput.value, true);
-          else customStartMs = dateInputToMs(dateInput.value, false);
+        if (start != null && end != null && start > end) {
+          if (dateInput.dataset.custom === 'start') end = dateInputToMs(dateInput.value, true);
+          else start = dateInputToMs(dateInput.value, false);
         }
+        if (sessions) { sessionCustomStartMs = start; sessionCustomEndMs = end; }
+        else { customStartMs = start; customEndMs = end; }
         saveUiState();
         render(lastData);
       }
@@ -1368,10 +1539,18 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       if (!d) return;
       if (d.dataset.section === 'budget') budgetOpen = d.open;
       else if (d.dataset.section === 'breakdown') breakdownOpen = d.open;
+      else if (d.dataset.section === 'sessions') sessionsOpen = d.open;
       saveUiState();
     }, true);
 
     root.addEventListener('click', e => {
+      if (e.target.closest('[data-session-order]')) {
+        sessionOrder = sessionOrder === 'asc' ? 'desc' : 'asc';
+        saveUiState();
+        render(lastData);
+        return;
+      }
+
       const el = e.target.closest('[data-action]');
       if (!el) return;
       vscode.postMessage({ type: el.dataset.action });

@@ -207,7 +207,7 @@ function harvest(
 }
 
 /** Trim a prompt down to a compact, single-line session title. */
-function toTitle(text: string | undefined, max = 80): string | undefined {
+export function toTitle(text: string | undefined, max = 80): string | undefined {
   if (!text) return undefined;
   const oneLine = text.replace(/\s+/g, ' ').trim();
   if (!oneLine) return undefined;
