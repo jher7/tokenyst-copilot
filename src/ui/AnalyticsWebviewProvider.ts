@@ -250,15 +250,41 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     }
     .panel-section > summary::-webkit-details-marker { display: none; }
     .panel-section > summary:hover { opacity: 0.85; }
-    .panel-section > summary::before {
-      content: '▸';
-      font-size: 9px;
-      transition: transform 0.15s ease;
-    }
-    .panel-section[open] > summary::before { transform: rotate(90deg); }
     /* Inner chart/kpi blocks shouldn't repeat the section border */
     .panel-section .chart-section,
     .panel-section .kpi-row { border-bottom: none; }
+
+    /* Collapsible metric sub-sections: the label becomes a clickable summary;
+       content lives in .chart-body. */
+    details.chart-section { padding: 0; }
+    details.chart-section > summary {
+      list-style: none;
+      cursor: pointer;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 8px 12px 6px;
+      margin-bottom: 0;
+    }
+    details.chart-section > summary::-webkit-details-marker { display: none; }
+    details.chart-section > summary:hover { color: var(--vscode-foreground); }
+    details.chart-section .chart-body { padding: 0 12px 10px; }
+
+    /* Expand/collapse-all control above the Breakdown sub-sections. */
+    .breakdown-tools {
+      display: flex;
+      justify-content: flex-end;
+      padding: 6px 12px 0;
+      margin-bottom: -4px;
+    }
+    .breakdown-toggle-all {
+      font-size: 10px;
+      color: var(--vscode-descriptionForeground);
+      cursor: pointer;
+      user-select: none;
+    }
+    .breakdown-toggle-all:hover { text-decoration: underline; }
     /* Filter pinned to the top-right of a section */
     .section-filter {
       display: flex;
@@ -328,7 +354,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
 
     /* Daily usage line chart */
     .usage-peak {
-      float: right;
+      margin-left: auto;
       text-transform: none;
       font-size: 10px;
       font-weight: normal;
@@ -489,6 +515,8 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       background: var(--vscode-dropdown-background, #1e1e1e);
       color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
     }
+    /* Fixed-height scroll area so the controls above (metric/count/date range) and
+       the sticky column headers stay visible while the rows scroll. */
     .session-list {
       padding: 4px 12px 10px;
     }
@@ -684,6 +712,11 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     let budgetOpen = persisted.budgetOpen ?? true;
     let breakdownOpen = persisted.breakdownOpen ?? false;
     let sessionsOpen = persisted.sessionsOpen ?? false;
+    // Collapsed state of each Breakdown sub-section, keyed by id (true = collapsed).
+    // Defaults to expanded (absent/false).
+    const breakdownCollapsed = persisted.breakdownCollapsed || {};
+    // Every collapsible Breakdown sub-section id, for the expand/collapse-all control.
+    const BREAKDOWN_SUBSECTIONS = ['daily', 'insights', 'byDayOfWeek', 'byModel', 'tokenBreakdown', 'bySource', 'byRepo'];
     // Sessions list controls: metric to sort by, sort direction, and an
     // independent date-range window (mirrors the Breakdown filter). Defaults to
     // all time so every session is visible without changing the period.
@@ -701,7 +734,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     let customEndMs = persisted.customEndMs ?? null;
     function saveUiState() {
       vscode.setState({
-        breakdownWindow, budgetOpen, breakdownOpen, sessionsOpen,
+        breakdownWindow, budgetOpen, breakdownOpen, sessionsOpen, breakdownCollapsed,
         sessionMetric, sessionSort, sessionOrder, sessionWindow, sessionCustomStartMs, sessionCustomEndMs,
         expandedSessions: Array.from(expandedSessions),
         customStartMs, customEndMs,
@@ -1233,18 +1266,20 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
             </div>\` : '';
 
       return \`
-        <div class="chart-section">
-          <div class="section-label">Daily usage <span class="usage-peak">peak \${esc(fmtCredits(peak))}</span></div>
-          <div class="usage-chart-wrap">
-            <svg class="usage-chart" viewBox="0 0 \${CHART_W} \${CHART_H}" width="100%" height="\${CHART_H}" preserveAspectRatio="none">
-              <path class="usage-area" d="\${area}" />
-              <path class="usage-line" d="\${line}" vector-effect="non-scaling-stroke" />
-            </svg>
-            <div class="usage-marker"></div>
-            <div class="usage-dot"></div>
-            <div class="usage-tip"></div>
-          </div>\${nav}
-        </div>
+        <details class="chart-section" data-subsection="daily" \${breakdownCollapsed['daily'] ? '' : 'open'}>
+          <summary class="section-label">Daily usage <span class="usage-peak">peak \${esc(fmtCredits(peak))}</span></summary>
+          <div class="chart-body">
+            <div class="usage-chart-wrap">
+              <svg class="usage-chart" viewBox="0 0 \${CHART_W} \${CHART_H}" width="100%" height="\${CHART_H}" preserveAspectRatio="none">
+                <path class="usage-area" d="\${area}" />
+                <path class="usage-line" d="\${line}" vector-effect="non-scaling-stroke" />
+              </svg>
+              <div class="usage-marker"></div>
+              <div class="usage-dot"></div>
+              <div class="usage-tip"></div>
+            </div>\${nav}
+          </div>
+        </details>
       \`;
     }
 
@@ -1549,61 +1584,50 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         \`;
       }
 
+      // A collapsible metric sub-section: clickable label (with chevron) + body.
+      const sub = (id, label, body) => \`
+        <details class="chart-section" data-subsection="\${id}" \${breakdownCollapsed[id] ? '' : 'open'}>
+          <summary class="section-label">\${label}</summary>
+          <div class="chart-body">\${body}</div>
+        </details>
+      \`;
       const emptyMsg = breakdownWindow === 'custom' ? 'No data for this range.' : 'No data for this period.';
-      const breakdownHtml = statsBreak.empty ? \`<div class="section-empty">\${emptyMsg}</div>\` : \`
-        \${renderUsageChart(statsBreak.daily)}
-
-        \${statsBreak.insights && statsBreak.insights.length ? \`
-        <div class="chart-section">
-          <div class="section-label">Insights</div>
-          <div class="insights-list">
-            \${statsBreak.insights.map(i => \`
-              <div class="insight insight--\${i.tone}">
-                <span class="insight-icon">\${esc(i.icon)}</span>
-                <div class="insight-text">
-                  <div class="insight-title">\${esc(i.title)}</div>
-                  <div class="insight-body">\${esc(i.body)}</div>
-                </div>
+      const insightsBody = \`
+        <div class="insights-list">
+          \${(statsBreak.insights || []).map(i => \`
+            <div class="insight insight--\${i.tone}">
+              <span class="insight-icon">\${esc(i.icon)}</span>
+              <div class="insight-text">
+                <div class="insight-title">\${esc(i.title)}</div>
+                <div class="insight-body">\${esc(i.body)}</div>
               </div>
-            \`).join('')}
-          </div>
+            </div>
+          \`).join('')}
         </div>
-        \` : ''}
-
-        <div class="chart-section">
-          <div class="section-label">By day of week</div>
-          \${renderBars(statsBreak.byDayOfWeek)}
+      \`;
+      const tokenBody = \`
+        \${renderBars([
+          { label: 'Input', value: statsBreak.tokenTotals.input },
+          { label: 'Output', value: statsBreak.tokenTotals.output },
+          { label: 'Cache write', value: statsBreak.tokenTotals.cacheCreation },
+          { label: 'Cache read', value: statsBreak.tokenTotals.cacheRead },
+        ].filter(r => r.value > 0), fmtTokens)}
+        <div style="padding:2px 0;color:var(--vscode-descriptionForeground);font-size:11px">Cache reuse: \${(statsBreak.cacheReusePct * 100).toFixed(0)}%</div>
+      \`;
+      // Offer "Collapse all" only when every section is already open; otherwise
+      // "Expand all" (so opening one section doesn't flip the control's meaning).
+      const allExpanded = BREAKDOWN_SUBSECTIONS.every(id => !breakdownCollapsed[id]);
+      const breakdownHtml = statsBreak.empty ? \`<div class="section-empty">\${emptyMsg}</div>\` : \`
+        <div class="breakdown-tools">
+          <span class="breakdown-toggle-all" data-breakdown-toggle>\${allExpanded ? 'Collapse all' : 'Expand all'}</span>
         </div>
-
-        <div class="chart-section">
-          <div class="section-label">By model</div>
-          \${renderBars(statsBreak.byModel)}
-        </div>
-
-        <div class="chart-section">
-          <div class="section-label">Token breakdown</div>
-          \${renderBars([
-            { label: 'Input', value: statsBreak.tokenTotals.input },
-            { label: 'Output', value: statsBreak.tokenTotals.output },
-            { label: 'Cache write', value: statsBreak.tokenTotals.cacheCreation },
-            { label: 'Cache read', value: statsBreak.tokenTotals.cacheRead },
-          ].filter(r => r.value > 0), fmtTokens)}
-          <div style="padding:2px 0;color:var(--vscode-descriptionForeground);font-size:11px">Cache reuse: \${(statsBreak.cacheReusePct * 100).toFixed(0)}%</div>
-        </div>
-
-        \${statsBreak.bySource && statsBreak.bySource.length > 1 ? \`
-        <div class="chart-section">
-          <div class="section-label">By source</div>
-          \${renderBars(statsBreak.bySource)}
-        </div>
-        \` : ''}
-
-        \${statsBreak.byRepo && statsBreak.byRepo.length > 0 ? \`
-        <div class="chart-section">
-          <div class="section-label">By repo</div>
-          \${renderBars(statsBreak.byRepo)}
-        </div>
-        \` : ''}
+        \${renderUsageChart(statsBreak.daily)}
+        \${statsBreak.insights && statsBreak.insights.length ? sub('insights', 'Insights', insightsBody) : ''}
+        \${sub('byDayOfWeek', 'By day of week', renderBars(statsBreak.byDayOfWeek))}
+        \${sub('byModel', 'By model', renderBars(statsBreak.byModel))}
+        \${sub('tokenBreakdown', 'Token breakdown', tokenBody)}
+        \${statsBreak.bySource && statsBreak.bySource.length > 1 ? sub('bySource', 'By source', renderBars(statsBreak.bySource)) : ''}
+        \${statsBreak.byRepo && statsBreak.byRepo.length > 0 ? sub('byRepo', 'By repo', renderBars(statsBreak.byRepo)) : ''}
       \`;
 
       const budgetSection = \`
@@ -1729,6 +1753,15 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     // Persist section collapse state across re-renders. The 'toggle' event does
     // not bubble, so listen in the capture phase.
     root.addEventListener('toggle', e => {
+      const t = e.target;
+      // Collapsible metric sub-sections inside Breakdown. Persist only — never
+      // re-render here: rebuilding the DOM from a toggle handler can re-fire the
+      // toggle event on freshly-created open details and spin into a loop.
+      if (t && t.matches && t.matches('details[data-subsection]')) {
+        breakdownCollapsed[t.dataset.subsection] = !t.open;
+        saveUiState();
+        return;
+      }
       const d = e.target.closest && e.target.closest('details[data-section]');
       if (!d) return;
       if (d.dataset.section === 'budget') budgetOpen = d.open;
@@ -1738,6 +1771,17 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
     }, true);
 
     root.addEventListener('click', e => {
+      // Expand/collapse every Breakdown sub-section at once. Collapse all only when
+      // every section is already open; otherwise expand all. (Mirrors the label, and
+      // is safe to re-render from a click handler.)
+      if (e.target.closest('[data-breakdown-toggle]')) {
+        const collapseAll = BREAKDOWN_SUBSECTIONS.every(id => !breakdownCollapsed[id]);
+        for (const id of BREAKDOWN_SUBSECTIONS) breakdownCollapsed[id] = collapseAll;
+        saveUiState();
+        render(lastData);
+        return;
+      }
+
       const th = e.target.closest('[data-sort]');
       if (th) {
         const col = th.dataset.sort;
