@@ -16,6 +16,8 @@ Section guide (omit any that are empty for a release):
 ### Fixed
 - Import Historical Usage no longer fails on Windows with `A system error occurred (EPERM): operation not permitted, rename`. Saving config now retries briefly when another process (e.g. antivirus or the search indexer) momentarily locks the file, and importing history saves once for the whole import instead of once per session.
 
+- Fixed an issue where users with no chat history are shown a blank Tokenyst panel.
+
 ## [0.5.2] - 2026-06-05
 ### Fixed
 - Collapse/Expand All control not working as expected.
