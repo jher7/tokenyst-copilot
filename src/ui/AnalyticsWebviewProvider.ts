@@ -1616,7 +1616,10 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
           \`).join('')}
         </div>
       \`;
-      const tokenBody = \`
+      // statsBreak.empty omits tokenTotals/cacheReusePct, so build this lazily —
+      // template literals evaluate eagerly and breakdownHtml's empty branch wouldn't
+      // save us from the property access below.
+      const tokenBody = statsBreak.empty ? '' : \`
         \${renderBars([
           { label: 'Input', value: statsBreak.tokenTotals.input },
           { label: 'Output', value: statsBreak.tokenTotals.output },

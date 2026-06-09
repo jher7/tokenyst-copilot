@@ -1,5 +1,5 @@
-import { loadConfig, mutateConfig, upsertCopilotSessionAllocation } from './core/local-config';
-import type { UsageSource } from './core/types';
+import { applyCopilotSessionUpsert, loadConfig, mutateConfig, upsertCopilotSessionAllocation } from './core/local-config';
+import type { SessionResult, UsageSource } from './core/types';
 import {
   findChatSessionFiles,
   parseChatSession,
@@ -31,16 +31,18 @@ export async function syncNow(): Promise<void> {
  * `source` tags which Copilot surface (chat/cli) produced it — both share the same
  * `provider: 'copilot'` budget total.
  */
-async function recordUsage(u: CopilotSessionUsage | CliSessionUsage, source: UsageSource): Promise<boolean> {
-  const cost = u.costUsd;
-
-  if (cost <= 0) {
+/**
+ * Map a parsed session-model usage to a `SessionResult` allocation, or null if it carries no
+ * billable cost (token-only/zero-cost records are skipped). Shared by the live-sync path
+ * (`recordUsage`) and the batched historical import (`importHistory`).
+ */
+function toAllocation(u: CopilotSessionUsage | CliSessionUsage, source: UsageSource): SessionResult | null {
+  if (u.costUsd <= 0) {
     debugLog(`bootstrap: skipping ${u.externalId} — cost=0 (model=${u.model})`);
-    return false;
+    return null;
   }
-
-  const result = await upsertCopilotSessionAllocation({
-    costUsd: cost,
+  return {
+    costUsd: u.costUsd,
     model: u.model,
     inputTokens: u.inputTokens,
     outputTokens: u.outputTokens,
@@ -54,10 +56,17 @@ async function recordUsage(u: CopilotSessionUsage | CliSessionUsage, source: Usa
     at: u.timestamp,
     sessionId: u.sessionId,
     title: u.title,
-  });
+  };
+}
+
+async function recordUsage(u: CopilotSessionUsage | CliSessionUsage, source: UsageSource): Promise<boolean> {
+  const alloc = toAllocation(u, source);
+  if (!alloc) return false;
+
+  const result = await upsertCopilotSessionAllocation(alloc);
   debugLog(
     `bootstrap: ${result.inserted ? 'inserted' : 'updated'} ${u.externalId} ` +
-    `source=${source} model=${u.model} cost=$${cost.toFixed(4)}`,
+    `source=${source} model=${u.model} cost=$${alloc.costUsd.toFixed(4)}`,
   );
   return result.inserted;
 }
@@ -74,19 +83,33 @@ export async function importHistory(since: string | null): Promise<number> {
   const cliFiles = findCliSessionFiles();
   debugLog(`import: scanning ${chatFiles.length} chat + ${cliFiles.length} cli session file(s) since ${since ?? 'beginning'}`);
 
-  let recorded = 0;
+  // Gather every qualifying allocation first, then apply them all under a SINGLE
+  // load→save cycle below. The old code saved config once per session, producing hundreds
+  // of temp-write+rename ops in a tight loop — on Windows that reliably collided with a
+  // transient file lock (EPERM on rename). One write per import removes that storm.
+  const allocations: SessionResult[] = [];
   for (const { file, sessionId, workspaceHash } of chatFiles) {
     for (const usage of parseChatSession(file, sessionId, workspaceHash)) {
       if (new Date(usage.timestamp).getTime() < sinceMs) continue;
-      if (await recordUsage(usage, 'chat')) recorded++;
+      const alloc = toAllocation(usage, 'chat');
+      if (alloc) allocations.push(alloc);
     }
   }
   for (const { file, sessionId } of cliFiles) {
     for (const usage of parseCliSession(file, sessionId)) {
       if (new Date(usage.timestamp).getTime() < sinceMs) continue;
-      if (await recordUsage(usage, 'cli')) recorded++;
+      const alloc = toAllocation(usage, 'cli');
+      if (alloc) allocations.push(alloc);
     }
   }
+
+  const recorded = await mutateConfig((cfg) => {
+    let inserted = 0;
+    for (const alloc of allocations) {
+      if (applyCopilotSessionUpsert(cfg, alloc).inserted) inserted++;
+    }
+    return inserted;
+  });
   debugLog(`import: recorded ${recorded} new allocation(s)`);
   return recorded;
 }
