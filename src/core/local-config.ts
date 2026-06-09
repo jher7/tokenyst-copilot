@@ -165,6 +165,27 @@ export async function loadConfig(): Promise<LocalConfig> {
   }
 }
 
+// On Windows, rename() over an existing file fails transiently (EPERM/EBUSY/EACCES) when
+// another process momentarily holds the destination open — Defender, the Search indexer, or
+// our own config.json FileSystemWatcher reacting to the previous save. Retry a few times with
+// short backoff so a brief lock self-heals instead of surfacing as an error popup. Other error
+// codes (and the final attempt) propagate to the caller unchanged.
+const TRANSIENT_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES', 'EEXIST']);
+
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  const backoffsMs = [50, 100, 200, 400];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.rename(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (attempt >= backoffsMs.length || !code || !TRANSIENT_RENAME_CODES.has(code)) throw err;
+      await new Promise((resolve) => setTimeout(resolve, backoffsMs[attempt]));
+    }
+  }
+}
+
 export async function saveConfig(cfg: LocalConfig): Promise<void> {
   await fs.mkdir(getConfigDir(), { recursive: true });
   // Atomic write: write to a unique temp file in the same dir, then rename over the
@@ -173,7 +194,7 @@ export async function saveConfig(cfg: LocalConfig): Promise<void> {
   const tmp = `${getConfigPath()}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
   try {
     await fs.writeFile(tmp, JSON.stringify(cfg, null, 2), 'utf8');
-    await fs.rename(tmp, getConfigPath());
+    await renameWithRetry(tmp, getConfigPath());
   } catch (err) {
     await fs.unlink(tmp).catch(() => {});
     throw err;
@@ -299,45 +320,55 @@ export async function recordLocalAllocation(
 export async function upsertCopilotSessionAllocation(
   session: SessionResult,
 ): Promise<{ success: boolean; inserted: boolean }> {
-  return mutateConfig((cfg) => {
-    const existing = session.externalId
-      ? cfg.allocations.find(a => a.externalId === session.externalId)
-      : undefined;
+  return mutateConfig((cfg) => applyCopilotSessionUpsert(cfg, session));
+}
 
-    if (existing) {
-      existing.costUsd = session.costUsd;
-      existing.model = session.model;
-      existing.inputTokens = session.inputTokens;
-      existing.outputTokens = session.outputTokens;
-      existing.cacheCreationTokens = session.cacheCreationTokens;
-      existing.cacheReadTokens = session.cacheReadTokens;
-      existing.filesModified = session.filesModified;
-      existing.repo = session.repo;
-      if (session.source) existing.source = session.source;
-      if (session.sessionId) existing.sessionId = session.sessionId;
-      if (session.title) existing.title = session.title;
-      if (session.at) existing.at = session.at;
-      return { success: true, inserted: false };
-    }
+/**
+ * Pure in-place form of the Copilot upsert: mutates the passed config and returns whether a
+ * new allocation was inserted. Lets a batch caller (the historical import) apply many sessions
+ * under a single load→save cycle instead of one save per session — see `importHistory`.
+ */
+export function applyCopilotSessionUpsert(
+  cfg: LocalConfig,
+  session: SessionResult,
+): { success: boolean; inserted: boolean } {
+  const existing = session.externalId
+    ? cfg.allocations.find(a => a.externalId === session.externalId)
+    : undefined;
 
-    cfg.allocations.push({
-      costUsd: session.costUsd,
-      model: session.model,
-      inputTokens: session.inputTokens,
-      outputTokens: session.outputTokens,
-      cacheCreationTokens: session.cacheCreationTokens,
-      cacheReadTokens: session.cacheReadTokens,
-      filesModified: session.filesModified,
-      at: session.at ?? new Date().toISOString(),
-      provider: session.provider ?? 'copilot',
-      externalId: session.externalId,
-      repo: session.repo,
-      source: session.source,
-      sessionId: session.sessionId,
-      title: session.title,
-    });
-    return { success: true, inserted: true };
+  if (existing) {
+    existing.costUsd = session.costUsd;
+    existing.model = session.model;
+    existing.inputTokens = session.inputTokens;
+    existing.outputTokens = session.outputTokens;
+    existing.cacheCreationTokens = session.cacheCreationTokens;
+    existing.cacheReadTokens = session.cacheReadTokens;
+    existing.filesModified = session.filesModified;
+    existing.repo = session.repo;
+    if (session.source) existing.source = session.source;
+    if (session.sessionId) existing.sessionId = session.sessionId;
+    if (session.title) existing.title = session.title;
+    if (session.at) existing.at = session.at;
+    return { success: true, inserted: false };
+  }
+
+  cfg.allocations.push({
+    costUsd: session.costUsd,
+    model: session.model,
+    inputTokens: session.inputTokens,
+    outputTokens: session.outputTokens,
+    cacheCreationTokens: session.cacheCreationTokens,
+    cacheReadTokens: session.cacheReadTokens,
+    filesModified: session.filesModified,
+    at: session.at ?? new Date().toISOString(),
+    provider: session.provider ?? 'copilot',
+    externalId: session.externalId,
+    repo: session.repo,
+    source: session.source,
+    sessionId: session.sessionId,
+    title: session.title,
   });
+  return { success: true, inserted: true };
 }
 
 /**

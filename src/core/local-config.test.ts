@@ -14,6 +14,16 @@ vi.mock('os', async (importOriginal) => {
   return { ...actual, homedir: () => holder.home };
 });
 
+// ESM forbids spying on a module's named exports, so wrap fs.rename in a vi.fn whose default
+// implementation passes through to the real rename. Tests that exercise the EPERM retry swap
+// in a failing implementation; `fsHolder.realRename` lets them fall back to the real op.
+const fsHolder = vi.hoisted(() => ({ realRename: (_f: any, _t: any): Promise<void> => Promise.resolve() }));
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs/promises')>();
+  fsHolder.realRename = actual.rename;
+  return { ...actual, default: actual, rename: vi.fn((from: any, to: any) => actual.rename(from, to)) };
+});
+
 import {
   recordLocalAllocation,
   loadConfig,
@@ -237,6 +247,55 @@ describe('upsertCopilotSessionAllocation persists sessionId and title', () => {
     cfg = await loadConfig();
     expect(cfg.allocations).toHaveLength(1);
     expect(cfg.allocations[0].title).toBe('Renamed prompt');
+  });
+});
+
+describe('saveConfig retries a transient rename failure (Windows EPERM)', () => {
+  const renameMock = vi.mocked(fs.rename);
+
+  beforeEach(async () => {
+    holder.home = await fs.mkdtemp(path.join(os.tmpdir(), 'tokenyst-test-'));
+    renameMock.mockClear();
+  });
+
+  afterEach(async () => {
+    // Restore the default pass-through so later describe blocks get a working rename.
+    renameMock.mockImplementation((from: any, to: any) => fsHolder.realRename(from, to));
+    await fs.rm(holder.home, { recursive: true, force: true });
+  });
+
+  const epermError = () => Object.assign(new Error('operation not permitted, rename'), { code: 'EPERM' });
+
+  it('retries on EPERM then succeeds, persisting the config', async () => {
+    let calls = 0;
+    renameMock.mockImplementation((from: any, to: any) => {
+      calls++;
+      if (calls <= 2) return Promise.reject(epermError()); // fail twice, then let it through
+      return fsHolder.realRename(from, to);
+    });
+
+    await saveConfig({ allocations: [], enabled: true, copilot: { enabled: true } });
+    expect(calls).toBe(3);
+
+    const cfg = await loadConfig();
+    expect(cfg.copilot?.enabled).toBe(true);
+  });
+
+  it('gives up and rethrows when EPERM persists past every retry', async () => {
+    renameMock.mockRejectedValue(epermError());
+    await expect(
+      saveConfig({ allocations: [], enabled: true }),
+    ).rejects.toMatchObject({ code: 'EPERM' });
+    // 1 initial attempt + 4 backoff retries.
+    expect(renameMock).toHaveBeenCalledTimes(5);
+  });
+
+  it('does not retry a non-transient error (rethrows immediately)', async () => {
+    renameMock.mockRejectedValue(Object.assign(new Error('no space left'), { code: 'ENOSPC' }));
+    await expect(
+      saveConfig({ allocations: [], enabled: true }),
+    ).rejects.toMatchObject({ code: 'ENOSPC' });
+    expect(renameMock).toHaveBeenCalledTimes(1);
   });
 });
 
