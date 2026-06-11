@@ -1,0 +1,76 @@
+name: Publish
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Read version and check for existing tag
+        id: guard
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "Tag v$VERSION already exists — skipping publish."
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Version v$VERSION is new — will publish."
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        if: steps.guard.outputs.should_publish == 'true'
+        run: npm install
+
+      - name: Build
+        if: steps.guard.outputs.should_publish == 'true'
+        run: npm run build
+
+      - name: Test
+        if: steps.guard.outputs.should_publish == 'true'
+        run: npm test
+
+      - name: Package
+        if: steps.guard.outputs.should_publish == 'true'
+        run: npm run package
+
+      - name: Publish to VS Marketplace
+        if: steps.guard.outputs.should_publish == 'true'
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx @vscode/vsce publish --packagePath "tokenyst-copilot-${{ steps.guard.outputs.version }}.vsix" --pat "$VSCE_PAT"
+
+      - name: Publish to Open VSX
+        if: steps.guard.outputs.should_publish == 'true'
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx ovsx publish "tokenyst-copilot-${{ steps.guard.outputs.version }}.vsix" --pat "$OVSX_PAT"
+
+      - name: Tag and create GitHub Release
+        if: steps.guard.outputs.should_publish == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.guard.outputs.version }}
+          name: v${{ steps.guard.outputs.version }}
+          files: tokenyst-copilot-${{ steps.guard.outputs.version }}.vsix
+          generate_release_notes: true
