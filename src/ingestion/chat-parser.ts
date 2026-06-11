@@ -18,8 +18,15 @@ export interface CopilotSessionUsage {
   costUsd: number;
   inputTokens: number;
   outputTokens: number;
-  cacheCreationTokens: number;
-  cacheReadTokens: number;
+  /**
+   * Estimated cache-write / cache-read tokens, or `null` when the session file
+   * carried no per-category prompt breakdown to derive them from. Newer VS Code
+   * builds persist only aggregate `promptTokens`/`outputTokens` (no
+   * `promptTokenDetails`), so the cache split is genuinely unknown — `null`
+   * is surfaced as "not reported" rather than a misleading zero.
+   */
+  cacheCreationTokens: number | null;
+  cacheReadTokens: number | null;
   timestamp: string;
   externalId: string;
   repo?: string;
@@ -106,6 +113,12 @@ interface UsageRecord {
   /** Stable System portion (System Instructions + Tool Definitions), cacheable across the session. */
   cacheableTokens: number;
   outputTokens: number;
+  /**
+   * Whether this request carried a per-category prompt breakdown
+   * (`usage.promptTokenDetails`). When false for every request in a session+model
+   * group, the cache split is unknown and is reported as `null` (not zero).
+   */
+  cacheReported: boolean;
 }
 
 /**
@@ -190,7 +203,8 @@ function harvest(
       // Split input into the cacheable System portion and the fresh remainder using
       // promptTokenDetails. When details are absent (e.g. agent-mode metadata), the
       // whole prompt is billed fresh — conservative, never under-counts.
-      const sysPct = systemPercent(usage?.['promptTokenDetails']);
+      const promptTokenDetails = usage?.['promptTokenDetails'];
+      const sysPct = systemPercent(promptTokenDetails);
       const cacheable = sysPct > 0 ? Math.round((input * sysPct) / 100) : 0;
       // Dedup by responseId — a request's usage may be re-serialized across deltas.
       records.set(responseId, {
@@ -199,6 +213,7 @@ function harvest(
         freshInputTokens: input - cacheable,
         cacheableTokens: cacheable,
         outputTokens: output,
+        cacheReported: Array.isArray(promptTokenDetails),
       });
     }
   }
@@ -271,13 +286,15 @@ export function parseChatSession(file: string, sessionId: string, workspaceHash 
   interface ModelAcc {
     costUsd: number; input: number; output: number;
     cacheCreation: number; cacheRead: number; cacheWritten: boolean;
+    cacheReported: boolean;
   }
   const perModel = new Map<string, ModelAcc>();
   for (const rec of records.values()) {
     const acc = perModel.get(rec.model)
-      ?? { costUsd: 0, input: 0, output: 0, cacheCreation: 0, cacheRead: 0, cacheWritten: false };
+      ?? { costUsd: 0, input: 0, output: 0, cacheCreation: 0, cacheRead: 0, cacheWritten: false, cacheReported: false };
     acc.input += rec.freshInputTokens + rec.cacheableTokens;
     acc.output += rec.outputTokens;
+    if (rec.cacheReported) acc.cacheReported = true;
 
     const gh = credits.get(rec.responseId);
     if (gh != null) {
@@ -307,8 +324,10 @@ export function parseChatSession(file: string, sessionId: string, workspaceHash 
       costUsd: acc.costUsd,
       inputTokens: acc.input,
       outputTokens: acc.output,
-      cacheCreationTokens: acc.cacheCreation,
-      cacheReadTokens: acc.cacheRead,
+      // Only report a cache split when the source actually provided a breakdown;
+      // otherwise it's unknown (null → "not reported"), never a misleading zero.
+      cacheCreationTokens: acc.cacheReported ? acc.cacheCreation : null,
+      cacheReadTokens: acc.cacheReported ? acc.cacheRead : null,
       timestamp: ts,
       externalId: `copilot-chat-${sessionId}-${model}`,
       repo,

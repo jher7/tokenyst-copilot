@@ -376,9 +376,10 @@ export function applyCopilotSessionUpsert(
  *  - `manual: true` (current entries), or
  *  - a `manual-*` externalId (entries created before the flag existed), or
  *  - a Copilot entry with all four token counts null. Synced/imported entries
- *    come from `SessionResult`, where those fields are required numbers, so only
- *    a hand-entered allocation leaves them null. This catches legacy manual
- *    entries that have neither the flag nor a `manual-*` externalId.
+ *    come from `SessionResult`, where `inputTokens`/`outputTokens` are required
+ *    numbers (only the two cache fields may be null), so a synced entry never has
+ *    all four null — only a hand-entered allocation does. This catches legacy
+ *    manual entries that have neither the flag nor a `manual-*` externalId.
  */
 /**
  * Classify which Copilot surface an allocation came from. Uses the explicit

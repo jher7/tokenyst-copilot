@@ -78,4 +78,42 @@ describe('parseChatSession session id + title', () => {
     expect(out[0].title).not.toContain('\n');
     expect(out[0].title).not.toContain('  ');
   });
+
+  // Newer VS Code builds persist only aggregate promptTokens/outputTokens (the
+  // shape on disk: a `metadata` object with no `promptTokenDetails`). With no
+  // per-category breakdown the cache split is unknown, so it must surface as null
+  // ("not reported") rather than a misleading zero.
+  it('reports null cache tokens when the session carries no prompt breakdown', () => {
+    const file = write('sess-3.json', { requests: [request('How does the test suite work?')] });
+    const out = parseChatSession(file, 'sess-3');
+    expect(out).toHaveLength(1);
+    expect(out[0].cacheCreationTokens).toBeNull();
+    expect(out[0].cacheReadTokens).toBeNull();
+    // Input/output are still counted — only the cache split is unknown.
+    expect(out[0].inputTokens).toBe(1000);
+    expect(out[0].outputTokens).toBe(200);
+  });
+
+  // When a request does carry a promptTokenDetails breakdown, the cache split is
+  // known and reported as numbers. Use a token-priced request (no credit details)
+  // so the System portion is written to cache by the first request.
+  it('reports numeric cache tokens when a prompt breakdown is present', () => {
+    const priced = {
+      message: { text: 'Explain caching' },
+      responseId: 'r1',
+      resolvedModel: 'claude-haiku-4.5',
+      usage: {
+        promptTokens: 1000,
+        completionTokens: 200,
+        promptTokenDetails: [{ category: 'System', percentageOfPrompt: 30 }],
+      },
+      completedAt: 1700000000000,
+    };
+    const file = write('sess-4.json', { requests: [priced] });
+    const out = parseChatSession(file, 'sess-4');
+    expect(out).toHaveLength(1);
+    // 30% of 1000 is the cacheable System block; the first request writes it.
+    expect(out[0].cacheCreationTokens).toBe(300);
+    expect(out[0].cacheReadTokens).toBe(0);
+  });
 });

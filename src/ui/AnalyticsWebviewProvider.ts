@@ -977,7 +977,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
           s = sessAcc[key] = {
             id: String(key), shortId, label: a.title || fallback, hasTitle: !!a.title,
             source: srcOf(a), repo: a.repo || null, models: {}, atMs: 0,
-            cost: 0, input: 0, output: 0, cacheCreation: 0, cacheRead: 0,
+            cost: 0, input: 0, output: 0, cacheCreation: 0, cacheRead: 0, cacheReported: false,
           };
         }
         if (a.title && !s.hasTitle) { s.label = a.title; s.hasTitle = true; }
@@ -988,28 +988,35 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         s.cost += a.costUsd;
         s.input += a.inputTokens || 0;
         s.output += a.outputTokens || 0;
+        // null cache counts mean the source reported no breakdown — sum as 0 but
+        // remember it was unknown so the detail view can say "not reported".
         s.cacheCreation += a.cacheCreationTokens || 0;
         s.cacheRead += a.cacheReadTokens || 0;
+        if (a.cacheCreationTokens != null || a.cacheReadTokens != null) s.cacheReported = true;
       }
       const sessions = Object.keys(sessAcc).map(k => sessAcc[k]);
 
-      // Token totals across the window (treat nulls as 0).
+      // Token totals across the window (treat nulls as 0). cacheReported stays
+      // false when no allocation carried a cache breakdown — then cache reuse is
+      // unknown, not zero, and we suppress the reuse % and the low-reuse insight.
       const tokenTotals = { input: 0, output: 0, cacheCreation: 0, cacheRead: 0 };
+      let cacheReported = false;
       for (const a of allocs) {
         tokenTotals.input += a.inputTokens || 0;
         tokenTotals.output += a.outputTokens || 0;
         tokenTotals.cacheCreation += a.cacheCreationTokens || 0;
         tokenTotals.cacheRead += a.cacheReadTokens || 0;
+        if (a.cacheCreationTokens != null || a.cacheReadTokens != null) cacheReported = true;
       }
       const cacheBase = tokenTotals.cacheRead + tokenTotals.cacheCreation + tokenTotals.input;
-      const cacheReusePct = cacheBase > 0 ? tokenTotals.cacheRead / cacheBase : 0;
+      const cacheReusePct = cacheReported && cacheBase > 0 ? tokenTotals.cacheRead / cacheBase : 0;
 
       // Optimization insights — short heuristic hints. Each is a structured card
       // ({ tone, icon, title, body }) so the UI can style by severity. Thresholds
       // are tunable.
       const LOW_CACHE_REUSE = 0.15, HOTSPOT_SHARE = 0.70, EXPENSIVE_FACTOR = 2;
       const insights = [];
-      if (cacheBase > 0 && cacheReusePct < LOW_CACHE_REUSE) {
+      if (cacheReported && cacheBase > 0 && cacheReusePct < LOW_CACHE_REUSE) {
         insights.push({
           tone: 'warn', icon: '⟳', title: 'Low cache reuse',
           body: 'Only ' + (cacheReusePct * 100).toFixed(0) + '% of input is served from cache — ' +
@@ -1047,7 +1054,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       return {
         todaySpent, thisWeekSpent, totalSpent, avgWeekly, avgDaily, avgMonthly,
         byDayOfWeek, byModel, byRepo, bySource, daily, sessions,
-        tokenTotals, cacheReusePct, insights: insightsTop,
+        tokenTotals, cacheReusePct, cacheReported, insights: insightsTop,
       };
     }
 
@@ -1197,8 +1204,8 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         ['Credits', fmtCredits(s.cost)],
         ['Input', fmtTokens(s.input) + ' tokens'],
         ['Output', fmtTokens(s.output) + ' tokens'],
-        ['Cache write', fmtTokens(s.cacheCreation) + ' tokens'],
-        ['Cache read', fmtTokens(s.cacheRead) + ' tokens'],
+        ['Cache write', s.cacheReported ? fmtTokens(s.cacheCreation) + ' tokens' : 'not reported'],
+        ['Cache read', s.cacheReported ? fmtTokens(s.cacheRead) + ' tokens' : 'not reported'],
         ['Source', s.source === 'cli' ? 'CLI' : 'Chat'],
         ['Repo', s.repo || '—'],
         ['Model', models.length ? models.join(', ') : '—'],
@@ -1626,7 +1633,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
           { label: 'Cache write', value: statsBreak.tokenTotals.cacheCreation },
           { label: 'Cache read', value: statsBreak.tokenTotals.cacheRead },
         ].filter(r => r.value > 0), fmtTokens)}
-        <div style="padding:2px 0;color:var(--vscode-descriptionForeground);font-size:11px">Cache reuse: \${(statsBreak.cacheReusePct * 100).toFixed(0)}%</div>
+        <div style="padding:2px 0;color:var(--vscode-descriptionForeground);font-size:11px">Cache reuse: \${statsBreak.cacheReported ? (statsBreak.cacheReusePct * 100).toFixed(0) + '%' : 'not reported'}</div>
       \`;
       const breakdownHtml = statsBreak.empty ? \`<div class="section-empty">\${emptyMsg}</div>\` : \`
         <hr class="breakdown-divider">
