@@ -21,8 +21,10 @@ export interface SessionResult {
   model: string;
   inputTokens: number;
   outputTokens: number;
-  cacheCreationTokens: number;
-  cacheReadTokens: number;
+  /** Cache-write / cache-read tokens, or `null` when the source reported no
+   * cache breakdown (surfaced as "not reported" rather than zero). */
+  cacheCreationTokens: number | null;
+  cacheReadTokens: number | null;
   filesModified: string[];
   provider?: ProviderId;
   externalId?: string;

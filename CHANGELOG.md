@@ -12,6 +12,10 @@ Section guide (omit any that are empty for a release):
 
 <!-- ## [Unreleased] -->
 
+## [0.5.4] - 2026-06-11
+### Fixed
+- Cache write/read tokens and cache-reuse percentage no longer show a misleading `0` when GitHub Copilot's session files don't include a per-request token breakdown (the case in recent VS Code builds). These now display **"not reported"**, and the "Low cache reuse" insight no longer fires when there is simply no cache data to measure.
+
 ## [0.5.3] - 2026-06-09
 ### Fixed
 - Import Historical Usage no longer fails on Windows with `A system error occurred (EPERM): operation not permitted, rename`. Saving config now retries briefly when another process (e.g. antivirus or the search indexer) momentarily locks the file, and importing history saves once for the whole import instead of once per session.
