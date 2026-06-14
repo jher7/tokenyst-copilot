@@ -129,6 +129,11 @@
         "category": "Tokenyst"
       },
       {
+        "command": "tokenyst.openConfig",
+        "title": "Open config.json",
+        "category": "Tokenyst"
+      },
+      {
         "command": "tokenyst.resetData",
         "title": "Reset All Data",
         "category": "Tokenyst"
