@@ -12,6 +12,13 @@ Section guide (omit any that are empty for a release):
 
 <!-- ## [Unreleased] -->
 
+## [0.5.5] - 2026-06-14
+### Changed
+- Cache write/read is now presented as a **CLI-only** metric, since GitHub Copilot only persists a per-request cache breakdown for CLI sessions — Chat sessions never save it. Chat session details no longer show empty cache rows, and cache totals now live in their own **"Cache (CLI Only)"** section that appears only when you have CLI usage.
+
+### Removed
+- Removed the cache-reuse percentage and the "Low cache reuse" insight. These were derived from Chat cache data that isn't actually recorded, so they could be misleading.
+
 ## [0.5.4] - 2026-06-11
 ### Fixed
 - Cache write/read tokens and cache-reuse percentage no longer show a misleading `0` when GitHub Copilot's session files don't include a per-request token breakdown (the case in recent VS Code builds). These now display **"not reported"**, and the "Low cache reuse" insight no longer fires when there is simply no cache data to measure.

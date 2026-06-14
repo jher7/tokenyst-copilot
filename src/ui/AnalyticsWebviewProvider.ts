@@ -105,6 +105,9 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       color: inherit;
     }
     .edit-label:hover { color: var(--vscode-foreground); text-decoration: underline; }
+    /* Highlighted blue to prompt the user when no reset date is set yet. */
+    .edit-label.unset { color: var(--vscode-textLink-foreground); }
+    .edit-label.unset:hover { color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground)); }
     .progress-track {
       height: 5px;
       background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.2));
@@ -944,6 +947,11 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         .map(([s, total]) => ({ label: SOURCE_LABEL[s] || s, value: total }))
         .sort((a, b) => b.value - a.value);
 
+      // Cache write/read is a CLI-only metric. Gate the Cache section on whether the
+      // config holds any CLI logs at all (not just this window), so pure-Chat users
+      // never see a cache section that could only ever be empty for them.
+      const hasCli = (allocations || []).some(a => a.provider === 'copilot' && srcOf(a) === 'cli');
+
       // Daily series for the line chart: contiguous, zero-filled days from the
       // window start to its axis end. All time starts at the earliest allocation.
       const dayKey = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
@@ -977,7 +985,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
           s = sessAcc[key] = {
             id: String(key), shortId, label: a.title || fallback, hasTitle: !!a.title,
             source: srcOf(a), repo: a.repo || null, models: {}, atMs: 0,
-            cost: 0, input: 0, output: 0, cacheCreation: 0, cacheRead: 0, cacheReported: false,
+            cost: 0, input: 0, output: 0, cacheCreation: 0, cacheRead: 0,
           };
         }
         if (a.title && !s.hasTitle) { s.label = a.title; s.hasTitle = true; }
@@ -988,41 +996,28 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         s.cost += a.costUsd;
         s.input += a.inputTokens || 0;
         s.output += a.outputTokens || 0;
-        // null cache counts mean the source reported no breakdown — sum as 0 but
-        // remember it was unknown so the detail view can say "not reported".
+        // Chat allocations carry null cache counts (no breakdown); sum as 0. The
+        // detail view shows these rows only for CLI sessions.
         s.cacheCreation += a.cacheCreationTokens || 0;
         s.cacheRead += a.cacheReadTokens || 0;
-        if (a.cacheCreationTokens != null || a.cacheReadTokens != null) s.cacheReported = true;
       }
       const sessions = Object.keys(sessAcc).map(k => sessAcc[k]);
 
-      // Token totals across the window (treat nulls as 0). cacheReported stays
-      // false when no allocation carried a cache breakdown — then cache reuse is
-      // unknown, not zero, and we suppress the reuse % and the low-reuse insight.
+      // Token totals across the window (treat nulls as 0). Cache write/read come only
+      // from CLI sessions; Chat allocations contribute 0.
       const tokenTotals = { input: 0, output: 0, cacheCreation: 0, cacheRead: 0 };
-      let cacheReported = false;
       for (const a of allocs) {
         tokenTotals.input += a.inputTokens || 0;
         tokenTotals.output += a.outputTokens || 0;
         tokenTotals.cacheCreation += a.cacheCreationTokens || 0;
         tokenTotals.cacheRead += a.cacheReadTokens || 0;
-        if (a.cacheCreationTokens != null || a.cacheReadTokens != null) cacheReported = true;
       }
-      const cacheBase = tokenTotals.cacheRead + tokenTotals.cacheCreation + tokenTotals.input;
-      const cacheReusePct = cacheReported && cacheBase > 0 ? tokenTotals.cacheRead / cacheBase : 0;
 
       // Optimization insights — short heuristic hints. Each is a structured card
       // ({ tone, icon, title, body }) so the UI can style by severity. Thresholds
       // are tunable.
-      const LOW_CACHE_REUSE = 0.15, HOTSPOT_SHARE = 0.70, EXPENSIVE_FACTOR = 2;
+      const HOTSPOT_SHARE = 0.70, EXPENSIVE_FACTOR = 2;
       const insights = [];
-      if (cacheReported && cacheBase > 0 && cacheReusePct < LOW_CACHE_REUSE) {
-        insights.push({
-          tone: 'warn', icon: '⟳', title: 'Low cache reuse',
-          body: 'Only ' + (cacheReusePct * 100).toFixed(0) + '% of input is served from cache — ' +
-            'repeated context is being re-sent instead of cached.',
-        });
-      }
       if (byModel.length && byModel[0].value / totalSpent >= HOTSPOT_SHARE) {
         insights.push({
           tone: 'info', icon: '◆', title: 'Model hotspot',
@@ -1054,7 +1049,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       return {
         todaySpent, thisWeekSpent, totalSpent, avgWeekly, avgDaily, avgMonthly,
         byDayOfWeek, byModel, byRepo, bySource, daily, sessions,
-        tokenTotals, cacheReusePct, cacheReported, insights: insightsTop,
+        tokenTotals, hasCli, insights: insightsTop,
       };
     }
 
@@ -1204,8 +1199,12 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         ['Credits', fmtCredits(s.cost)],
         ['Input', fmtTokens(s.input) + ' tokens'],
         ['Output', fmtTokens(s.output) + ' tokens'],
-        ['Cache write', s.cacheReported ? fmtTokens(s.cacheCreation) + ' tokens' : 'not reported'],
-        ['Cache read', s.cacheReported ? fmtTokens(s.cacheRead) + ' tokens' : 'not reported'],
+        // Cache write/read is a CLI-only metric — Chat sessions never persist a cache
+        // breakdown, so those rows are omitted rather than shown as "not reported".
+        ...(s.source === 'cli'
+          ? [['Cache write', fmtTokens(s.cacheCreation) + ' tokens'],
+             ['Cache read', fmtTokens(s.cacheRead) + ' tokens']]
+          : []),
         ['Source', s.source === 'cli' ? 'CLI' : 'Chat'],
         ['Repo', s.repo || '—'],
         ['Model', models.length ? models.join(', ') : '—'],
@@ -1418,7 +1417,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
 
       const renewalSub = renewalDay != null
         ? \`<span class="pace-sub"><span class="edit-label" data-action="setRenewalDate" title="Edit reset date">Resets on the \${ordinal(renewalDay)}</span></span>\`
-        : \`<span class="pace-sub"><span class="edit-label" data-action="setRenewalDate">set reset date</span></span>\`;
+        : \`<span class="pace-sub"><span class="edit-label unset" data-action="setRenewalDate">set reset date</span></span>\`;
 
       let monthlyHtml;
       if (monthlyBudgetUsd != null && monthlyBudgetUsd > 0) {
@@ -1623,17 +1622,22 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
           \`).join('')}
         </div>
       \`;
-      // statsBreak.empty omits tokenTotals/cacheReusePct, so build this lazily —
-      // template literals evaluate eagerly and breakdownHtml's empty branch wouldn't
-      // save us from the property access below.
+      // statsBreak.empty omits tokenTotals, so build this lazily — template literals
+      // evaluate eagerly and breakdownHtml's empty branch wouldn't save us from the
+      // property access below.
       const tokenBody = statsBreak.empty ? '' : \`
         \${renderBars([
           { label: 'Input', value: statsBreak.tokenTotals.input },
           { label: 'Output', value: statsBreak.tokenTotals.output },
+        ].filter(r => r.value > 0), fmtTokens)}
+      \`;
+      // Cache write/read is a CLI-only metric (Chat sessions persist no breakdown),
+      // so it lives in its own section, shown only when the config holds CLI logs.
+      const cacheBody = statsBreak.empty ? '' : \`
+        \${renderBars([
           { label: 'Cache write', value: statsBreak.tokenTotals.cacheCreation },
           { label: 'Cache read', value: statsBreak.tokenTotals.cacheRead },
         ].filter(r => r.value > 0), fmtTokens)}
-        <div style="padding:2px 0;color:var(--vscode-descriptionForeground);font-size:11px">Cache reuse: \${statsBreak.cacheReported ? (statsBreak.cacheReusePct * 100).toFixed(0) + '%' : 'not reported'}</div>
       \`;
       const breakdownHtml = statsBreak.empty ? \`<div class="section-empty">\${emptyMsg}</div>\` : \`
         <hr class="breakdown-divider">
@@ -1646,6 +1650,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
         \${sub('byDayOfWeek', 'By day of week', renderBars(statsBreak.byDayOfWeek))}
         \${sub('byModel', 'By model', renderBars(statsBreak.byModel))}
         \${sub('tokenBreakdown', 'Token breakdown', tokenBody)}
+        \${statsBreak.hasCli ? sub('cache', 'Cache (CLI Only)', cacheBody) : ''}
         \${statsBreak.bySource && statsBreak.bySource.length > 1 ? sub('bySource', 'By source', renderBars(statsBreak.bySource)) : ''}
         \${statsBreak.byRepo && statsBreak.byRepo.length > 0 ? sub('byRepo', 'By repo', renderBars(statsBreak.byRepo)) : ''}
       \`;
