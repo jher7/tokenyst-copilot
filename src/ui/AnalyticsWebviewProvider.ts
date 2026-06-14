@@ -105,6 +105,9 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       color: inherit;
     }
     .edit-label:hover { color: var(--vscode-foreground); text-decoration: underline; }
+    /* Highlighted blue to prompt the user when no reset date is set yet. */
+    .edit-label.unset { color: var(--vscode-textLink-foreground); }
+    .edit-label.unset:hover { color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground)); }
     .progress-track {
       height: 5px;
       background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.2));
@@ -1418,7 +1421,7 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
 
       const renewalSub = renewalDay != null
         ? \`<span class="pace-sub"><span class="edit-label" data-action="setRenewalDate" title="Edit reset date">Resets on the \${ordinal(renewalDay)}</span></span>\`
-        : \`<span class="pace-sub"><span class="edit-label" data-action="setRenewalDate">set reset date</span></span>\`;
+        : \`<span class="pace-sub"><span class="edit-label unset" data-action="setRenewalDate">set reset date</span></span>\`;
 
       let monthlyHtml;
       if (monthlyBudgetUsd != null && monthlyBudgetUsd > 0) {
