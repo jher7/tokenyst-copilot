@@ -25,6 +25,26 @@ export async function syncNow(): Promise<void> {
 }
 
 /**
+ * Get the midnight timestamp (milliseconds) for a given date in UTC.
+ */
+function getMidnightUtcMs(timestampMs: number): number {
+  const date = new Date(timestampMs);
+  date.setUTCHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+/**
+ * Format a date in YYYYMMDD format for use in daily allocation IDs.
+ */
+function formatDateYYYYMMDD(timestampMs: number): string {
+  const date = new Date(timestampMs);
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  return `${year}${month}${day}`;
+}
+
+/**
  * Record one parsed session-model usage as an allocation (upsert by externalId).
  * Returns true if a brand-new allocation was inserted. `costUsd` is already
  * resolved by the parser (real GitHub credits where available, else token-priced).
@@ -32,16 +52,74 @@ export async function syncNow(): Promise<void> {
  * `provider: 'copilot'` budget total.
  */
 /**
- * Map a parsed session-model usage to a `SessionResult` allocation, or null if it carries no
- * billable cost (token-only/zero-cost records are skipped). Shared by the live-sync path
- * (`recordUsage`) and the batched historical import (`importHistory`).
+ * Map a parsed session-model usage to one or more `SessionResult` allocations.
+ * Zero-cost usage returns an empty list.
+ *
+ * Chat usage with per-request timestamps is split into per-day allocations.
+ * Everything else falls back to a single session-level allocation.
  */
-function toAllocation(u: CopilotSessionUsage | CliSessionUsage, source: UsageSource): SessionResult | null {
+function toAllocation(u: CopilotSessionUsage | CliSessionUsage, source: UsageSource): SessionResult[] {
   if (u.costUsd <= 0) {
     debugLog(`bootstrap: skipping ${u.externalId} — cost=0 (model=${u.model})`);
-    return null;
+    return [];
   }
-  return {
+
+  // If we have per-request timestamps, split by calendar day.
+  const chatUsage = u as CopilotSessionUsage;
+  if (chatUsage.requests && chatUsage.requests.length > 0) {
+    type DayAcc = {
+      costUsd: number;
+      inputTokens: number;
+      outputTokens: number;
+      cacheCreationTokens: number;
+      cacheReadTokens: number;
+      dateStr: string;
+    };
+    const dayMap = new Map<number, DayAcc>();
+    for (const req of chatUsage.requests) {
+      const midnightMs = getMidnightUtcMs(req.completedAtMs);
+      const dateStr = formatDateYYYYMMDD(req.completedAtMs);
+      const existing = dayMap.get(midnightMs) ?? {
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        dateStr,
+      };
+      existing.costUsd += req.costUsd;
+      existing.inputTokens += req.inputTokens;
+      existing.outputTokens += req.outputTokens;
+      existing.cacheCreationTokens += req.cacheCreationTokens;
+      existing.cacheReadTokens += req.cacheReadTokens;
+      dayMap.set(midnightMs, existing);
+    }
+
+    const results: SessionResult[] = [];
+    for (const [midnightMs, dayData] of dayMap) {
+      if (dayData.costUsd <= 0) continue;
+      results.push({
+        costUsd: dayData.costUsd,
+        model: u.model,
+        inputTokens: dayData.inputTokens,
+        outputTokens: dayData.outputTokens,
+        cacheCreationTokens: dayData.cacheCreationTokens > 0 ? dayData.cacheCreationTokens : null,
+        cacheReadTokens: dayData.cacheReadTokens > 0 ? dayData.cacheReadTokens : null,
+        filesModified: [],
+        provider: 'copilot',
+        externalId: `${u.externalId}-${dayData.dateStr}`,
+        repo: u.repo,
+        source,
+        at: new Date(midnightMs).toISOString(),
+        sessionId: u.sessionId,
+        title: u.title,
+      });
+    }
+    return results;
+  }
+
+  // Fallback: no per-request data, create single allocation using session-level timestamp.
+  return [{
     costUsd: u.costUsd,
     model: u.model,
     inputTokens: u.inputTokens,
@@ -56,19 +134,23 @@ function toAllocation(u: CopilotSessionUsage | CliSessionUsage, source: UsageSou
     at: u.timestamp,
     sessionId: u.sessionId,
     title: u.title,
-  };
+  }];
 }
 
 async function recordUsage(u: CopilotSessionUsage | CliSessionUsage, source: UsageSource): Promise<boolean> {
   const alloc = toAllocation(u, source);
-  if (!alloc) return false;
+  if (alloc.length === 0) return false;
 
-  const result = await upsertCopilotSessionAllocation(alloc);
-  debugLog(
-    `bootstrap: ${result.inserted ? 'inserted' : 'updated'} ${u.externalId} ` +
-    `source=${source} model=${u.model} cost=$${alloc.costUsd.toFixed(4)}`,
-  );
-  return result.inserted;
+  let anyInserted = false;
+  for (const a of alloc) {
+    const result = await upsertCopilotSessionAllocation(a);
+    if (result.inserted) anyInserted = true;
+    debugLog(
+      `bootstrap: ${result.inserted ? 'inserted' : 'updated'} ${a.externalId} ` +
+      `source=${source} model=${u.model} cost=$${a.costUsd.toFixed(4)}`,
+    );
+  }
+  return anyInserted;
 }
 
 /**
@@ -92,14 +174,14 @@ export async function importHistory(since: string | null): Promise<number> {
     for (const usage of parseChatSession(file, sessionId, workspaceHash)) {
       if (new Date(usage.timestamp).getTime() < sinceMs) continue;
       const alloc = toAllocation(usage, 'chat');
-      if (alloc) allocations.push(alloc);
+      allocations.push(...alloc);
     }
   }
   for (const { file, sessionId } of cliFiles) {
     for (const usage of parseCliSession(file, sessionId)) {
       if (new Date(usage.timestamp).getTime() < sinceMs) continue;
-      const alloc = toAllocation(usage, 'cli');
-      if (alloc) allocations.push(alloc);
+      const allocs = toAllocation(usage, 'cli');
+      allocations.push(...allocs);
     }
   }
 

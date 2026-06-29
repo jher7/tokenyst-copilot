@@ -248,6 +248,21 @@ describe('upsertCopilotSessionAllocation persists sessionId and title', () => {
     expect(cfg.allocations).toHaveLength(1);
     expect(cfg.allocations[0].title).toBe('Renamed prompt');
   });
+
+  it('replaces a legacy base externalId when dated chat allocations are inserted', async () => {
+    const legacyId = 'copilot-chat-s1-gpt-4o';
+    await upsertCopilotSessionAllocation({ ...base, externalId: legacyId, title: 'Legacy entry' });
+    await upsertCopilotSessionAllocation({
+      ...base,
+      externalId: `${legacyId}-20260501`,
+      title: 'Daily split entry',
+    });
+
+    const cfg = await loadConfig();
+    expect(cfg.allocations).toHaveLength(1);
+    expect(cfg.allocations[0].externalId).toBe(`${legacyId}-20260501`);
+    expect(cfg.allocations[0].title).toBe('Daily split entry');
+  });
 });
 
 describe('saveConfig retries a transient rename failure (Windows EPERM)', () => {

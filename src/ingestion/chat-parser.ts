@@ -2,6 +2,22 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { resolveModel, calculateCost, CREDITS_PER_USD } from '../core/pricing';
+import { debugLog } from '../util';
+/**
+ * Per-request usage data: the cost and timestamp of a single response.
+ * Used internally to track which requests occurred on which calendar days,
+ * enabling accurate daily attribution across multi-day sessions.
+ */
+export interface PerRequestUsage {
+  responseId: string;
+  completedAtMs: number; // millisecond timestamp when this request completed
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+}
+
 
 /**
  * Per-session, per-model usage aggregated from a VS Code Copilot Chat session.
@@ -29,6 +45,8 @@ export interface CopilotSessionUsage {
   cacheReadTokens: number | null;
   timestamp: string;
   externalId: string;
+    /** Per-request usage details with timestamps. Used for daily attribution. */
+    requests?: PerRequestUsage[];
   repo?: string;
   /** Human-readable title: the session's first user prompt (truncated). */
   title?: string;
@@ -119,6 +137,8 @@ interface UsageRecord {
    * group, the cache split is unknown and is reported as `null` (not zero).
    */
   cacheReported: boolean;
+  /** Millisecond timestamp when this request completed. */
+  completedAtMs: number;
 }
 
 /**
@@ -194,26 +214,32 @@ function harvest(
     if (m) credits.set(responseId, parseFloat(m[1]));
   }
 
-  if (responseId && (input > 0 || output > 0)) {
+  if (responseId) {
     const resolved =
       (value['resolvedModel'] as string | undefined) ?? (meta?.['resolvedModel'] as string | undefined);
     const details = value['details'];
     const modelRaw = resolved ?? (typeof details === 'string' ? modelFromDetails(details) : undefined);
-    if (modelRaw) {
-      // Split input into the cacheable System portion and the fresh remainder using
-      // promptTokenDetails. When details are absent (e.g. agent-mode metadata), the
-      // whole prompt is billed fresh — conservative, never under-counts.
+    const hasRecordedCredits = credits.has(responseId);
+
+    // Keep a record when we have either token usage or an authoritative credit line.
+    if (modelRaw && (input > 0 || output > 0 || hasRecordedCredits)) {
       const promptTokenDetails = usage?.['promptTokenDetails'];
       const sysPct = systemPercent(promptTokenDetails);
       const cacheable = sysPct > 0 ? Math.round((input * sysPct) / 100) : 0;
-      // Dedup by responseId — a request's usage may be re-serialized across deltas.
+      const completedAtMs = typeof value['completedAt'] === 'number'
+        ? (value['completedAt'] as number)
+        : (typeof value['creationDate'] === 'number' ? (value['creationDate'] as number) : Date.now());
+
+      // Merge deltas for the same responseId: keep any known fields from earlier records.
+      const prev = records.get(responseId);
       records.set(responseId, {
         responseId,
-        model: resolveModel(modelRaw).id,
-        freshInputTokens: input - cacheable,
-        cacheableTokens: cacheable,
-        outputTokens: output,
-        cacheReported: Array.isArray(promptTokenDetails),
+        model: prev?.model ?? resolveModel(modelRaw).id,
+        freshInputTokens: input > 0 ? input - cacheable : (prev?.freshInputTokens ?? 0),
+        cacheableTokens: input > 0 ? cacheable : (prev?.cacheableTokens ?? 0),
+        outputTokens: output > 0 ? output : (prev?.outputTokens ?? 0),
+        cacheReported: Array.isArray(promptTokenDetails) || prev?.cacheReported === true,
+        completedAtMs,
       });
     }
   }
@@ -275,6 +301,13 @@ export function parseChatSession(file: string, sessionId: string, workspaceHash 
   const titleRef: { text?: string } = {};
   for (const value of readJsonOrJsonl(file)) harvest(value, records, credits, times, titleRef);
 
+  if (credits.size > records.size) {
+    debugLog(
+      `chat-parser: credits found for ${credits.size} response(s), usage records for ${records.size} ` +
+      `(session=${sessionId}, file=${path.basename(file)})`,
+    );
+  }
+
   if (records.size === 0) return [];
 
   const title = toTitle(titleRef.text);
@@ -289,6 +322,8 @@ export function parseChatSession(file: string, sessionId: string, workspaceHash 
     cacheReported: boolean;
   }
   const perModel = new Map<string, ModelAcc>();
+    // Track per-request costs for daily attribution.
+    const perRequestCosts = new Map<string, { costUsd: number; cacheCreation: number; cacheRead: number }>();
   for (const rec of records.values()) {
     const acc = perModel.get(rec.model)
       ?? { costUsd: 0, input: 0, output: 0, cacheCreation: 0, cacheRead: 0, cacheWritten: false, cacheReported: false };
@@ -297,18 +332,30 @@ export function parseChatSession(file: string, sessionId: string, workspaceHash 
     if (rec.cacheReported) acc.cacheReported = true;
 
     const gh = credits.get(rec.responseId);
+      let requestCostUsd = 0;
+      let requestCacheCreation = 0;
+      let requestCacheRead = 0;
     if (gh != null) {
+        requestCostUsd = gh / CREDITS_PER_USD;
       acc.costUsd += gh / CREDITS_PER_USD;
     } else {
       let cc = 0, cr = 0;
       if (rec.cacheableTokens > 0) {
         if (!acc.cacheWritten) { cc = rec.cacheableTokens; acc.cacheWritten = true; }
         else { cr = rec.cacheableTokens; }
+        requestCacheCreation = cc;
+        requestCacheRead = cr;
       }
       acc.cacheCreation += cc;
       acc.cacheRead += cr;
-      acc.costUsd += calculateCost(rec.model, rec.freshInputTokens, rec.outputTokens, cc, cr) ?? 0;
+      requestCostUsd = calculateCost(rec.model, rec.freshInputTokens, rec.outputTokens, cc, cr) ?? 0;
+      acc.costUsd += requestCostUsd;
     }
+    perRequestCosts.set(rec.responseId, {
+      costUsd: requestCostUsd,
+      cacheCreation: requestCacheCreation,
+      cacheRead: requestCacheRead,
+    });
     perModel.set(rec.model, acc);
   }
 
@@ -318,6 +365,23 @@ export function parseChatSession(file: string, sessionId: string, workspaceHash 
   const result: CopilotSessionUsage[] = [];
   for (const [model, acc] of perModel) {
     if (acc.costUsd <= 0) continue;
+        // Build requests array: filter per-model requests with their timestamps and costs
+        const requests: PerRequestUsage[] = [];
+        for (const rec of records.values()) {
+          if (rec.model !== model) continue;
+          const costData = perRequestCosts.get(rec.responseId);
+          if (costData) {
+            requests.push({
+              responseId: rec.responseId,
+              completedAtMs: rec.completedAtMs,
+              costUsd: costData.costUsd,
+              inputTokens: rec.freshInputTokens + rec.cacheableTokens,
+              outputTokens: rec.outputTokens,
+              cacheCreationTokens: costData.cacheCreation,
+              cacheReadTokens: costData.cacheRead,
+            });
+          }
+        }
     result.push({
       sessionId,
       model,
@@ -332,6 +396,7 @@ export function parseChatSession(file: string, sessionId: string, workspaceHash 
       externalId: `copilot-chat-${sessionId}-${model}`,
       repo,
       title,
+      requests: requests.length > 0 ? requests : undefined,
     });
   }
   return result;

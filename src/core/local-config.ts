@@ -352,6 +352,14 @@ export function applyCopilotSessionUpsert(
     return { success: true, inserted: false };
   }
 
+  // If this allocation has a date suffix (from per-request daily split),
+  // remove any old allocations with the base ID (legacy single-timestamp format).
+  // Pattern: "copilot-chat-<sessionId>-<model>-<YYYYMMDD>"
+  if (typeof session.externalId === 'string' && /-\d{8}$/.test(session.externalId)) {
+    const baseId = session.externalId.replace(/-\d{8}$/, '');
+    cfg.allocations = cfg.allocations.filter(a => a.externalId !== baseId);
+  }
+
   cfg.allocations.push({
     costUsd: session.costUsd,
     model: session.model,

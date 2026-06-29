@@ -116,4 +116,57 @@ describe('parseChatSession session id + title', () => {
     expect(out[0].cacheCreationTokens).toBe(300);
     expect(out[0].cacheReadTokens).toBe(0);
   });
+
+  it('keeps credit-only responses (no tokens) so compacted history is not under-counted', () => {
+    const doc = {
+      requests: [
+        {
+          message: { text: 'first' },
+          responseId: 'r1',
+          resolvedModel: 'claude-haiku-4.5',
+          details: 'Claude Haiku 4.5 • 2 credits',
+          usage: { promptTokens: 1000, completionTokens: 200 },
+          completedAt: 1700000000000,
+        },
+        {
+          responseId: 'r2',
+          details: 'Claude Haiku 4.5 • 3 credits',
+          completedAt: 1700000100000,
+        },
+      ],
+    };
+    const file = write('sess-5.json', doc);
+    const out = parseChatSession(file, 'sess-5');
+    expect(out).toHaveLength(1);
+    // 2 + 3 credits = 5 credits total.
+    expect(out[0].costUsd).toBeCloseTo(0.05, 8);
+    expect(out[0].requests?.length).toBe(2);
+  });
+
+  it('exposes per-request completion timestamps for downstream daily attribution', () => {
+    const file = write('sess-6.json', {
+      requests: [
+        {
+          message: { text: 'a' },
+          responseId: 'r1',
+          resolvedModel: 'claude-haiku-4.5',
+          details: 'Claude Haiku 4.5 • 1 credits',
+          usage: { promptTokens: 10, completionTokens: 10 },
+          completedAt: 1700000000000,
+        },
+        {
+          message: { text: 'b' },
+          responseId: 'r2',
+          resolvedModel: 'claude-haiku-4.5',
+          details: 'Claude Haiku 4.5 • 1 credits',
+          usage: { promptTokens: 10, completionTokens: 10 },
+          completedAt: 1700086400000,
+        },
+      ],
+    });
+    const out = parseChatSession(file, 'sess-6');
+    expect(out).toHaveLength(1);
+    const ts = (out[0].requests ?? []).map(r => r.completedAtMs).sort((a, b) => a - b);
+    expect(ts).toEqual([1700000000000, 1700086400000]);
+  });
 });

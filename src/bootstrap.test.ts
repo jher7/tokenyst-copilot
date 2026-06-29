@@ -47,6 +47,40 @@ function usage(i: number, ts: string, costUsd = 0.1): CopilotSessionUsage {
   };
 }
 
+function usageWithRequests(sessionId: string): CopilotSessionUsage {
+  return {
+    sessionId,
+    model: 'copilot-gpt-4o',
+    costUsd: 0.3,
+    inputTokens: 3,
+    outputTokens: 3,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+    timestamp: '2026-05-02T12:00:00.000Z',
+    externalId: `copilot-chat-${sessionId}-copilot-gpt-4o`,
+    requests: [
+      {
+        responseId: 'r1',
+        completedAtMs: Date.parse('2026-05-01T22:00:00.000Z'),
+        costUsd: 0.1,
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+      },
+      {
+        responseId: 'r2',
+        completedAtMs: Date.parse('2026-05-02T08:00:00.000Z'),
+        costUsd: 0.2,
+        inputTokens: 2,
+        outputTokens: 2,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+      },
+    ],
+  };
+}
+
 describe('importHistory', () => {
   beforeEach(async () => {
     holder.home = await fs.mkdtemp(path.join(os.tmpdir(), 'tokenyst-test-'));
@@ -96,5 +130,19 @@ describe('importHistory', () => {
     expect(second).toBe(0); // both already present → upserted, nothing newly inserted
     const cfg = await loadConfig();
     expect(cfg.allocations).toHaveLength(2);
+  });
+
+  it('splits chat usage by calendar day when per-request timestamps are present', async () => {
+    fixtures.chat = [usageWithRequests('multi-day')];
+
+    const recorded = await importHistory(null);
+
+    expect(recorded).toBe(2);
+    const cfg = await loadConfig();
+    const ids = cfg.allocations.map(a => a.externalId).sort();
+    expect(ids).toEqual([
+      'copilot-chat-multi-day-copilot-gpt-4o-20260501',
+      'copilot-chat-multi-day-copilot-gpt-4o-20260502',
+    ]);
   });
 });
