@@ -36,6 +36,9 @@ export interface LocalAllocation {
   sessionId?: string;
   /** Human-readable session title (chat: first user prompt). Absent for CLI/legacy. */
   title?: string;
+  /** responseIds counted in this allocation; used to deduplicate requests inherited
+   * by forked sessions. Absent on legacy/CLI/manual allocations. */
+  responseIds?: string[];
 }
 
 /** Unit used to display amounts in the UI. Cost is always stored in USD. */
@@ -92,6 +95,9 @@ function normalizeAllocation(a: unknown): LocalAllocation {
     source: raw.source === 'cli' || raw.source === 'chat' ? raw.source : undefined,
     sessionId: raw.sessionId != null ? String(raw.sessionId) : undefined,
     title: raw.title != null ? String(raw.title) : undefined,
+    responseIds: Array.isArray(raw.responseIds)
+      ? (raw.responseIds as unknown[]).filter((v): v is string => typeof v === 'string')
+      : undefined,
   };
 }
 
@@ -349,7 +355,16 @@ export function applyCopilotSessionUpsert(
     if (session.sessionId) existing.sessionId = session.sessionId;
     if (session.title) existing.title = session.title;
     if (session.at) existing.at = session.at;
+    if (session.responseIds) existing.responseIds = session.responseIds;
     return { success: true, inserted: false };
+  }
+
+  // If this allocation has a date suffix (from per-request daily split),
+  // remove any old allocations with the base ID (legacy single-timestamp format).
+  // Pattern: "copilot-chat-<sessionId>-<model>-<YYYYMMDD>"
+  if (typeof session.externalId === 'string' && /-\d{8}$/.test(session.externalId)) {
+    const baseId = session.externalId.replace(/-\d{8}$/, '');
+    cfg.allocations = cfg.allocations.filter(a => a.externalId !== baseId);
   }
 
   cfg.allocations.push({
@@ -367,6 +382,7 @@ export function applyCopilotSessionUpsert(
     source: session.source,
     sessionId: session.sessionId,
     title: session.title,
+    responseIds: session.responseIds,
   });
   return { success: true, inserted: true };
 }

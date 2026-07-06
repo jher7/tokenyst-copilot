@@ -457,6 +457,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   eventsWatcher.onDidChange(onEventsChange);
   eventsWatcher.onDidCreate(onEventsChange);
 
+  // Watch empty-window Chat sessions (no workspace folder open):
+  // globalStorage/emptyWindowChatSessions/*.json[l]
+  const emptyWindowWatcher = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(
+      vscode.Uri.file(path.join(getVSCodeUserDir(), 'globalStorage', 'emptyWindowChatSessions')),
+      '*.json*',
+    ),
+  );
+  emptyWindowWatcher.onDidChange(onEventsChange);
+  emptyWindowWatcher.onDidCreate(onEventsChange);
+
   // Watch Copilot CLI session logs (~/.copilot/session-state/<id>/events.jsonl) with
   // the same debounced handler, so CLI usage syncs live just like Chat.
   const cliEventsWatcher = vscode.workspace.createFileSystemWatcher(
@@ -468,7 +479,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   cliEventsWatcher.onDidChange(onEventsChange);
   cliEventsWatcher.onDidCreate(onEventsChange);
 
-  context.subscriptions.push(eventsWatcher, cliEventsWatcher, {
+  context.subscriptions.push(eventsWatcher, emptyWindowWatcher, cliEventsWatcher, {
     dispose: () => { if (eventsDebounce) clearTimeout(eventsDebounce); },
   });
 

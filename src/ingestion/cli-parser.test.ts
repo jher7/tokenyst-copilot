@@ -122,8 +122,8 @@ describe('parseCliSession', () => {
       shutdown({ 'gpt-5-mini': { usage: usage({ inputTokens: 10000, outputTokens: 500, cacheReadTokens: 2000 }) } }, '2026-05-28T14:41:44.798Z'),
     ]);
     const [rec] = parseCliSession(file, id);
-    // fresh = 10000 - 2000 = 8000 @ $0.75/M + 500 @ $4.5/M + cacheRead 2000 @ $0.075/M
-    const expected = (8000 / 1e6) * 0.75 + (500 / 1e6) * 4.5 + (2000 / 1e6) * 0.75 * 0.1;
+    // fresh = 10000 - 2000 = 8000 @ $0.25/M + 500 @ $2.0/M + cacheRead 2000 @ $0.025/M
+    const expected = (8000 / 1e6) * 0.25 + (500 / 1e6) * 2.0 + (2000 / 1e6) * 0.25 * 0.1;
     expect(rec.costUsd).toBeCloseTo(expected, 10);
   });
 

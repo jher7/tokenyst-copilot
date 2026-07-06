@@ -37,4 +37,7 @@ export interface SessionResult {
   sessionId?: string;
   /** Human-readable session title (chat: first user prompt). Absent for CLI. */
   title?: string;
+  /** responseIds counted in this allocation; used to deduplicate requests inherited
+   * by forked sessions. Absent on legacy/CLI/manual allocations. */
+  responseIds?: string[];
 }
