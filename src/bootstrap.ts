@@ -74,6 +74,7 @@ function toAllocation(u: CopilotSessionUsage | CliSessionUsage, source: UsageSou
       cacheCreationTokens: number;
       cacheReadTokens: number;
       dateStr: string;
+      latestMs: number;
     };
     const dayMap = new Map<number, DayAcc>();
     for (const req of chatUsage.requests) {
@@ -86,12 +87,14 @@ function toAllocation(u: CopilotSessionUsage | CliSessionUsage, source: UsageSou
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
         dateStr,
+        latestMs: 0,
       };
       existing.costUsd += req.costUsd;
       existing.inputTokens += req.inputTokens;
       existing.outputTokens += req.outputTokens;
       existing.cacheCreationTokens += req.cacheCreationTokens;
       existing.cacheReadTokens += req.cacheReadTokens;
+      if (req.completedAtMs > existing.latestMs) existing.latestMs = req.completedAtMs;
       dayMap.set(midnightMs, existing);
     }
 
@@ -110,7 +113,7 @@ function toAllocation(u: CopilotSessionUsage | CliSessionUsage, source: UsageSou
         externalId: `${u.externalId}-${dayData.dateStr}`,
         repo: u.repo,
         source,
-        at: new Date(midnightMs).toISOString(),
+        at: new Date(dayData.latestMs).toISOString(),
         sessionId: u.sessionId,
         title: u.title,
       });

@@ -977,10 +977,11 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       // scraped chat title, else repo · shortId · model.
       const sessAcc = {};
       for (const a of allocs) {
-        const key = a.sessionId || a.externalId || 'unknown';
+        const sessBase = a.sessionId || a.externalId || 'unknown';
+        const key = sessBase + '_' + dayKey(Date.parse(a.at));
         let s = sessAcc[key];
         if (!s) {
-          const shortId = String(a.sessionId || key).replace(/^copilot-(chat|cli)-/, '').slice(0, 6);
+          const shortId = String(a.sessionId || sessBase).replace(/^copilot-(chat|cli)-/, '').slice(0, 6);
           const fallback = (a.repo ? a.repo + ' · ' : '') + shortId + ' · ' + fmtModel(a.model);
           s = sessAcc[key] = {
             id: String(key), shortId, label: a.title || fallback, hasTitle: !!a.title,

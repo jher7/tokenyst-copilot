@@ -226,11 +226,35 @@ function harvest(
       const promptTokenDetails = usage?.['promptTokenDetails'];
       const sysPct = systemPercent(promptTokenDetails);
       const cacheable = sysPct > 0 ? Math.round((input * sysPct) / 100) : 0;
+
+      // In agent-mode JSONL sessions, per-request completion timestamps live in
+      // toolCallRounds inside the result.metadata object (accessible via `meta` when
+      // processing the `result` object, or directly as `value.toolCallRounds` when
+      // processing `result.metadata` itself). The last round's timestamp is the closest
+      // proxy for when the model actually completed the request.
+      const roundsArr = Array.isArray(meta?.['toolCallRounds'])
+        ? (meta!['toolCallRounds'] as AnyObj[])
+        : Array.isArray(value['toolCallRounds'])
+          ? (value['toolCallRounds'] as AnyObj[])
+          : [];
+      const lastRoundTs = roundsArr.length > 0 ? num(roundsArr[roundsArr.length - 1]['timestamp']) : 0;
+
+      const hasRealTimestamp = typeof value['completedAt'] === 'number'
+        || typeof value['creationDate'] === 'number'
+        || lastRoundTs > 0;
       const completedAtMs = typeof value['completedAt'] === 'number'
         ? (value['completedAt'] as number)
-        : (typeof value['creationDate'] === 'number' ? (value['creationDate'] as number) : Date.now());
+        : typeof value['creationDate'] === 'number'
+          ? (value['creationDate'] as number)
+          : lastRoundTs > 0
+            ? lastRoundTs
+            : Date.now();
 
       // Merge deltas for the same responseId: keep any known fields from earlier records.
+      // completedAtMs: prefer a real timestamp from either delta; only fall back to Date.now()
+      // if no real timestamp has been seen yet. This prevents a credit-only delta (details
+      // string, no completedAt) from overwriting a real timestamp already captured by the
+      // token-usage delta for the same responseId.
       const prev = records.get(responseId);
       records.set(responseId, {
         responseId,
@@ -239,7 +263,7 @@ function harvest(
         cacheableTokens: input > 0 ? cacheable : (prev?.cacheableTokens ?? 0),
         outputTokens: output > 0 ? output : (prev?.outputTokens ?? 0),
         cacheReported: Array.isArray(promptTokenDetails) || prev?.cacheReported === true,
-        completedAtMs,
+        completedAtMs: hasRealTimestamp ? completedAtMs : (prev?.completedAtMs ?? completedAtMs),
       });
     }
   }
