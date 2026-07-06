@@ -11,6 +11,12 @@ Section guide (omit any that are empty for a release):
 -->
 
 <!-- ## [Unreleased] -->
+## [0.5.6] - 2026-07-06
+### Fixed
+
+- **Multi-day session splitting**: split-day allocations from the same session (e.g. a chat started on one day and continued the next) now appear as separate rows in the Sessions tab instead of being merged into a single row.
+
+- **Fork session double-counting**: forking a Copilot Chat session caused all inherited requests (from the parent session) to be counted a second time. Tokenyst now deduplicates requests by `responseId` across sessions. Sessions are processed oldest-first so the original session is always credited first; any request that already appears in an earlier session is silently skipped in the fork.
 
 ## [0.5.5] - 2026-06-14
 ### Changed
