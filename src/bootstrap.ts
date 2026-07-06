@@ -1,4 +1,5 @@
 import { applyCopilotSessionUpsert, loadConfig, mutateConfig, upsertCopilotSessionAllocation } from './core/local-config';
+import type { LocalAllocation } from './core/local-config';
 import type { SessionResult, UsageSource } from './core/types';
 import {
   findChatSessionFiles,
@@ -75,6 +76,7 @@ function toAllocation(u: CopilotSessionUsage | CliSessionUsage, source: UsageSou
       cacheReadTokens: number;
       dateStr: string;
       latestMs: number;
+      responseIds: string[];
     };
     const dayMap = new Map<number, DayAcc>();
     for (const req of chatUsage.requests) {
@@ -88,6 +90,7 @@ function toAllocation(u: CopilotSessionUsage | CliSessionUsage, source: UsageSou
         cacheReadTokens: 0,
         dateStr,
         latestMs: 0,
+        responseIds: [] as string[],
       };
       existing.costUsd += req.costUsd;
       existing.inputTokens += req.inputTokens;
@@ -95,6 +98,7 @@ function toAllocation(u: CopilotSessionUsage | CliSessionUsage, source: UsageSou
       existing.cacheCreationTokens += req.cacheCreationTokens;
       existing.cacheReadTokens += req.cacheReadTokens;
       if (req.completedAtMs > existing.latestMs) existing.latestMs = req.completedAtMs;
+      existing.responseIds.push(req.responseId);
       dayMap.set(midnightMs, existing);
     }
 
@@ -116,6 +120,7 @@ function toAllocation(u: CopilotSessionUsage | CliSessionUsage, source: UsageSou
         at: new Date(dayData.latestMs).toISOString(),
         sessionId: u.sessionId,
         title: u.title,
+        responseIds: dayData.responseIds,
       });
     }
     return results;
@@ -138,6 +143,40 @@ function toAllocation(u: CopilotSessionUsage | CliSessionUsage, source: UsageSou
     sessionId: u.sessionId,
     title: u.title,
   }];
+}
+
+/**
+ * Build a Set of all response IDs already stored in config allocations.
+ * Used to detect and skip duplicate requests inherited by forked sessions.
+ */
+function collectSeenResponseIds(allocations: LocalAllocation[]): Set<string> {
+  const seen = new Set<string>();
+  for (const a of allocations) {
+    if (Array.isArray(a.responseIds)) {
+      for (const id of a.responseIds) seen.add(id);
+    }
+  }
+  return seen;
+}
+
+/**
+ * Return a copy of `usage` with any requests whose responseId is already in `seen`
+ * filtered out, and `costUsd` / token counts recalculated from the remainder.
+ * A chat session forked from another inherits the parent's request objects;
+ * deduplicating by responseId ensures the parent's credits aren't counted twice.
+ * Returns the original object unchanged when no requests are filtered.
+ */
+function filterDuplicateRequests(
+  usage: CopilotSessionUsage,
+  seen: Set<string>,
+): CopilotSessionUsage {
+  if (!usage.requests || usage.requests.length === 0) return usage;
+  const fresh = usage.requests.filter(r => !seen.has(r.responseId));
+  if (fresh.length === usage.requests.length) return usage;
+  const costUsd = fresh.reduce((s, r) => s + r.costUsd, 0);
+  const inputTokens = fresh.reduce((s, r) => s + r.inputTokens, 0);
+  const outputTokens = fresh.reduce((s, r) => s + r.outputTokens, 0);
+  return { ...usage, requests: fresh, costUsd, inputTokens, outputTokens };
 }
 
 async function recordUsage(u: CopilotSessionUsage | CliSessionUsage, source: UsageSource): Promise<boolean> {
@@ -168,6 +207,18 @@ export async function importHistory(since: string | null): Promise<number> {
   const cliFiles = findCliSessionFiles();
   debugLog(`import: scanning ${chatFiles.length} chat + ${cliFiles.length} cli session file(s) since ${since ?? 'beginning'}`);
 
+  // Sort chat files oldest-first so original sessions are processed before their forks.
+  // Forks inherit the parent's request objects — deduplicating by responseId prevents
+  // the parent's credits from being counted a second time.
+  chatFiles.sort((a, b) => a.mtimeMs - b.mtimeMs);
+
+  // Seed seenResponseIds. For a full rebuild (since=null) start fresh — sorting oldest-
+  // first handles ordering within this run. For a partial import, seed from existing
+  // config so sessions before `since` (already stored) block duplicate requests in forks
+  // that fall after `since`.
+  const existingCfg = since ? await loadConfig() : null;
+  const seenResponseIds = collectSeenResponseIds(existingCfg?.allocations ?? []);
+
   // Gather every qualifying allocation first, then apply them all under a SINGLE
   // load→save cycle below. The old code saved config once per session, producing hundreds
   // of temp-write+rename ops in a tight loop — on Windows that reliably collided with a
@@ -175,9 +226,18 @@ export async function importHistory(since: string | null): Promise<number> {
   const allocations: SessionResult[] = [];
   for (const { file, sessionId, workspaceHash } of chatFiles) {
     for (const usage of parseChatSession(file, sessionId, workspaceHash)) {
-      if (new Date(usage.timestamp).getTime() < sinceMs) continue;
-      const alloc = toAllocation(usage, 'chat');
-      allocations.push(...alloc);
+      if (new Date(usage.timestamp).getTime() < sinceMs) {
+        // Still collect responseIds from older sessions so forks after `since` are deduped.
+        if (usage.requests) {
+          for (const r of usage.requests) seenResponseIds.add(r.responseId);
+        }
+        continue;
+      }
+      const deduped = filterDuplicateRequests(usage, seenResponseIds);
+      if (deduped.requests) {
+        for (const r of deduped.requests) seenResponseIds.add(r.responseId);
+      }
+      allocations.push(...toAllocation(deduped, 'chat'));
     }
   }
   for (const { file, sessionId } of cliFiles) {
@@ -240,9 +300,18 @@ async function _sync(): Promise<void> {
   );
 
   let touched = 0;
+  // Build seenResponseIds from existing allocations to avoid double-counting requests
+  // inherited by forked sessions. Sort changed files oldest-first so originals are
+  // processed before their forks within the same sync batch.
+  const seenResponseIds = collectSeenResponseIds(cfg.allocations ?? []);
+  changedChat.sort((a, b) => a.mtimeMs - b.mtimeMs);
   for (const { file, sessionId, workspaceHash } of changedChat) {
     for (const usage of parseChatSession(file, sessionId, workspaceHash)) {
-      await recordUsage(usage, 'chat');
+      const deduped = filterDuplicateRequests(usage, seenResponseIds);
+      if (deduped.requests) {
+        for (const r of deduped.requests) seenResponseIds.add(r.responseId);
+      }
+      await recordUsage(deduped, 'chat');
       touched++;
     }
   }
