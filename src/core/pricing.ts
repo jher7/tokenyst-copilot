@@ -10,36 +10,44 @@ export interface PricingEntry {
 export const MODEL_PRICING: Record<string, PricingEntry> = {
   // Generic family fallbacks — used when a specific version isn't listed below,
   // so a brand-new model still gets a sane price instead of $0.
-  'claude-opus':   { inputPerMillion: 15,  outputPerMillion: 75 },
-  'claude-sonnet': { inputPerMillion: 3,   outputPerMillion: 15 },
-  'claude-haiku':  { inputPerMillion: 0.8, outputPerMillion: 4.0 },
-  'gpt':           { inputPerMillion: 2.5, outputPerMillion: 15 },
-  'gemini':        { inputPerMillion: 0.1, outputPerMillion: 0.4 },
+  'claude-opus':   { inputPerMillion: 5,    outputPerMillion: 25 },   // Opus 4.x rate
+  'claude-sonnet': { inputPerMillion: 3,    outputPerMillion: 15 },   // Sonnet 4.x rate
+  'claude-haiku':  { inputPerMillion: 1.0,  outputPerMillion: 5.0 },
+  'gpt':           { inputPerMillion: 2.5,  outputPerMillion: 15 },   // GPT-5.4 proxy
+  'gemini':        { inputPerMillion: 1.25, outputPerMillion: 10 },   // Gemini 2.5 Pro proxy
   // o-series reasoning models. Representative rate — adjust if a specific o-model
   // is listed below or its published rate differs.
-  'o-series':      { inputPerMillion: 2,   outputPerMillion: 8 },
-  // Copilot models - OpenAI (June 2026)
+  'o-series':      { inputPerMillion: 2,    outputPerMillion: 8 },
+  // Copilot models - OpenAI
   'copilot-gpt-5.5':             { inputPerMillion: 5,    outputPerMillion: 30 },
   'copilot-gpt-5.4':             { inputPerMillion: 2.5,  outputPerMillion: 15 },
   'copilot-gpt-5.4-mini':        { inputPerMillion: 0.75, outputPerMillion: 4.5 },
-  'copilot-gpt-5.4-nano':        { inputPerMillion: 0.3,  outputPerMillion: 1.2 },
-  'copilot-gpt-5.3-codex':       { inputPerMillion: 2.0,  outputPerMillion: 8.0 },
-  'copilot-gpt-5-mini':          { inputPerMillion: 0.75, outputPerMillion: 4.5 },
+  'copilot-gpt-5.4-nano':        { inputPerMillion: 0.20, outputPerMillion: 1.25 },
+  'copilot-gpt-5.3-codex':       { inputPerMillion: 1.75, outputPerMillion: 14.0 },
+  'copilot-gpt-5-mini':          { inputPerMillion: 0.25, outputPerMillion: 2.0 },
   // Copilot models - Claude Sonnet
+  'copilot-claude-sonnet-5':     { inputPerMillion: 2.0,  outputPerMillion: 10 },    // promotional through Aug 2026
   'copilot-claude-sonnet-4.6':   { inputPerMillion: 3,    outputPerMillion: 15 },
   'copilot-claude-sonnet-4.5':   { inputPerMillion: 3,    outputPerMillion: 15 },
-  // Copilot models - Claude Opus
-  'copilot-claude-opus-4.8':     { inputPerMillion: 15,   outputPerMillion: 75 },
-  'copilot-claude-opus-4.7':     { inputPerMillion: 15,   outputPerMillion: 75 },
-  'copilot-claude-opus-4.6':     { inputPerMillion: 15,   outputPerMillion: 75 },
-  'copilot-claude-opus-4.5':     { inputPerMillion: 15,   outputPerMillion: 75 },
+  'copilot-claude-sonnet-4':     { inputPerMillion: 3,    outputPerMillion: 15 },
+  // Copilot models - Claude Opus / Fable
+  'copilot-claude-fable-5':      { inputPerMillion: 10,   outputPerMillion: 50 },
+  'copilot-claude-opus-4.8-fast':{ inputPerMillion: 10,   outputPerMillion: 50 },    // fast mode (preview)
+  'copilot-claude-opus-4.8':     { inputPerMillion: 5,    outputPerMillion: 25 },
+  'copilot-claude-opus-4.7':     { inputPerMillion: 5,    outputPerMillion: 25 },
+  'copilot-claude-opus-4.6':     { inputPerMillion: 5,    outputPerMillion: 25 },
+  'copilot-claude-opus-4.5':     { inputPerMillion: 5,    outputPerMillion: 25 },
   // Copilot models - Claude Haiku
-  'copilot-claude-haiku-4.5':    { inputPerMillion: 0.8,  outputPerMillion: 4.0 },
+  'copilot-claude-haiku-4.5':    { inputPerMillion: 1.0,  outputPerMillion: 5.0 },
   // Copilot models - Google Gemini
-  'copilot-gemini-3.5-flash':    { inputPerMillion: 0.075, outputPerMillion: 0.3 },
-  'copilot-gemini-3.1-pro':      { inputPerMillion: 0.1,   outputPerMillion: 0.4 },
-  'copilot-gemini-3-flash':      { inputPerMillion: 0.05,  outputPerMillion: 0.2 },
-  'copilot-gemini-2.5-pro':      { inputPerMillion: 0.1,   outputPerMillion: 0.4 },
+  'copilot-gemini-3.5-flash':    { inputPerMillion: 1.50, outputPerMillion: 9.0 },
+  'copilot-gemini-3.1-pro':      { inputPerMillion: 2.0,  outputPerMillion: 12.0 },
+  'copilot-gemini-3-flash':      { inputPerMillion: 0.50, outputPerMillion: 3.0 },
+  'copilot-gemini-2.5-pro':      { inputPerMillion: 1.25, outputPerMillion: 10.0 },
+  // Copilot models - Other providers
+  'copilot-raptor-mini':         { inputPerMillion: 0.25, outputPerMillion: 2.0 },   // GitHub fine-tuned
+  'copilot-mai-code-1-flash':    { inputPerMillion: 0.75, outputPerMillion: 4.5 },   // Microsoft
+  'copilot-kimi-k2.7-code':      { inputPerMillion: 0.95, outputPerMillion: 4.0 },   // Moonshot AI
 };
 
 const CACHE_WRITE_MULTIPLIER = 1.25;
