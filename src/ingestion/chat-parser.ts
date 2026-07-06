@@ -90,31 +90,57 @@ function getWorkspaceStorageDir(): string {
   return path.join(getVSCodeUserDir(), 'workspaceStorage');
 }
 
-export function findChatSessionFiles(): ChatSessionFile[] {
-  const root = getWorkspaceStorageDir();
-  if (!fs.existsSync(root)) return [];
+/** Directory for Copilot Chat sessions opened without any workspace folder. */
+function getEmptyWindowChatSessionsDir(): string {
+  return path.join(getVSCodeUserDir(), 'globalStorage', 'emptyWindowChatSessions');
+}
 
+export function findChatSessionFiles(): ChatSessionFile[] {
   const out: ChatSessionFile[] = [];
-  for (const hash of fs.readdirSync(root)) {
-    const csDir = path.join(root, hash, 'chatSessions');
-    let entries: string[];
-    try {
-      entries = fs.readdirSync(csDir);
-    } catch {
-      continue; // no chatSessions in this workspace
+
+  // Workspace-scoped sessions: workspaceStorage/<hash>/chatSessions/*.json[l]
+  const root = getWorkspaceStorageDir();
+  if (fs.existsSync(root)) {
+    for (const hash of fs.readdirSync(root)) {
+      const csDir = path.join(root, hash, 'chatSessions');
+      let entries: string[];
+      try {
+        entries = fs.readdirSync(csDir);
+      } catch {
+        continue; // no chatSessions in this workspace
+      }
+      for (const entry of entries) {
+        if (!entry.endsWith('.json') && !entry.endsWith('.jsonl')) continue;
+        const file = path.join(csDir, entry);
+        let mtimeMs = 0;
+        try {
+          mtimeMs = fs.statSync(file).mtimeMs;
+        } catch {
+          continue;
+        }
+        out.push({ file, sessionId: entry.replace(/\.jsonl?$/, ''), workspaceHash: hash, mtimeMs });
+      }
     }
-    for (const entry of entries) {
+  }
+
+  // Empty-window sessions (no workspace folder open):
+  // globalStorage/emptyWindowChatSessions/<sessionId>.json[l]
+  const emptyDir = getEmptyWindowChatSessionsDir();
+  if (fs.existsSync(emptyDir)) {
+    for (const entry of fs.readdirSync(emptyDir)) {
       if (!entry.endsWith('.json') && !entry.endsWith('.jsonl')) continue;
-      const file = path.join(csDir, entry);
+      const file = path.join(emptyDir, entry);
       let mtimeMs = 0;
       try {
         mtimeMs = fs.statSync(file).mtimeMs;
       } catch {
         continue;
       }
-      out.push({ file, sessionId: entry.replace(/\.jsonl?$/, ''), workspaceHash: hash, mtimeMs });
+      // workspaceHash is '' — parseChatSession already handles this (repo → undefined).
+      out.push({ file, sessionId: entry.replace(/\.jsonl?$/, ''), workspaceHash: '', mtimeMs });
     }
   }
+
   return out;
 }
 
