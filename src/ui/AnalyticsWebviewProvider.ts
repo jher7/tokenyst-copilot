@@ -888,8 +888,17 @@ export class AnalyticsWebviewProvider implements vscode.WebviewViewProvider {
       // Window bounds unavailable yet (e.g. last/custom before they're set).
       if (range.startMs == null) return { todaySpent, thisWeekSpent, empty: true };
 
+      // Unpriced allocations (a model with no credit line, no built-in price and no
+      // manual override) are excluded from every cost aggregate below. They carry
+      // costUsd 0 and 0 tokens by construction — that 0 means "unknown", NOT "free" —
+      // so including them adds nothing to any total while inventing $0 rows in the
+      // model/repo/session breakdowns, i.e. rendering unknown spend as free. Their
+      // real usage is preserved in unpricedRequestCount/unpricedInput/OutputTokens
+      // and must be surfaced as its own "N requests with unknown cost" indicator,
+      // never as a priced row.
       const allocs = (allocations || []).filter(
-        a => a.provider === 'copilot' && Date.parse(a.at) >= range.startMs && Date.parse(a.at) < range.endMs
+        a => a.provider === 'copilot' && !(a.unpricedRequestCount > 0)
+          && Date.parse(a.at) >= range.startMs && Date.parse(a.at) < range.endMs
       );
 
       if (allocs.length === 0) return { todaySpent, thisWeekSpent, empty: true };
