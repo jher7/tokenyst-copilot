@@ -110,12 +110,13 @@ function familyKey(c: string): string | null {
  *
  * `livePricing` is an optional map of live per-model rates sourced directly
  * from the model provider via VS Code's *proposed, unstable*
- * `languageModelPricing` API (see `core/live-model-pricing.ts`) — gated behind
- * the `tokenyst.experimental.useLiveModelPricing` setting and empty in the
- * published build (that build never declares the proposal). When present for
- * a given model id, it takes priority over even the built-in table, since it
- * reflects the provider's current real rate rather than a maintainer-curated
- * snapshot that can go stale.
+ * `languageModelPricing` API (see `core/live-model-pricing.ts`). No production
+ * caller passes it today — the module is built but not yet wired to a
+ * `vscode.lm.selectChatModels()` call — so in every shipped build this argument
+ * is undefined and resolution falls through to the built-in table. When a rate
+ * IS present for a given model id, it takes priority over even the built-in
+ * table, since it reflects the provider's current real rate rather than a
+ * maintainer-curated snapshot that can go stale.
  */
 export function resolveModel(
   raw: string,

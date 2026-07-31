@@ -22,17 +22,23 @@ import { resolveModel, CREDITS_PER_USD, type PricingEntry } from './pricing';
  *   - A maintainer who wants to experiment locally (not for publishing) can add
  *     `"enabledApiProposals": ["languageModelPricing"]` to package.json and run
  *     VS Code Insiders with proposed-API access enabled for this extension id.
- *     With that one change, `LanguageModelChat` objects returned by
+ *     With that change, `LanguageModelChat` objects returned by
  *     `vscode.lm.selectChatModels()` will actually carry `inputCost`/
- *     `outputCost`, and this same code starts producing real entries — no
- *     other code changes needed.
+ *     `outputCost`, and this same code starts producing real entries.
  *   - Once `languageModelPricing` graduates to VS Code's *stable* API, this
  *     whole conditional-availability story goes away: the fields are simply
- *     always there, `enabledApiProposals` is deleted, and
- *     `tokenyst.experimental.useLiveModelPricing` can default to `true`.
+ *     always there and `enabledApiProposals` is deleted.
  *
- * Gated end-to-end behind the (default `false`) `tokenyst.experimental.
- * useLiveModelPricing` setting — see extension.ts / package.json.
+ * NOT WIRED UP YET. Nothing calls this module: `extension.ts` never fetches
+ * models, and `resolveModel`/`calculateCost` are never passed a `livePricing`
+ * map, so live pricing is inert regardless of build. Making it live needs two
+ * things that do not exist yet — a `vscode.lm.selectChatModels()` call at the
+ * activation site feeding `buildLiveModelPricing` through to the parser, and a
+ * user-facing setting to gate it on. A `tokenyst.experimental.useLiveModelPricing`
+ * setting was contributed in package.json ahead of that wiring and has since been
+ * removed: a published setting that silently does nothing is a support burden and
+ * a compatibility commitment. Re-add it in the same change that wires the call
+ * site, not before.
  */
 export interface LiveModelPricingSource {
   /** Opaque model identifier, e.g. `claude-sonnet-4-6-20260214`. */
