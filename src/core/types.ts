@@ -40,4 +40,16 @@ export interface SessionResult {
   /** responseIds counted in this allocation; used to deduplicate requests inherited
    * by forked sessions. Absent on legacy/CLI/manual allocations. */
   responseIds?: string[];
+  /** Number of requests in this allocation with no known price at all: no real
+   * credit value and no built-in pricing match. These are NOT counted in
+   * `costUsd` — not even as a `0` — so `costUsd` genuinely excludes (and
+   * understates relative to) real spend. Omitted when zero. */
+  unpricedRequestCount?: number;
+  /** Input/output tokens belonging to the unpriced requests counted above. */
+  unpricedInputTokens?: number;
+  unpricedOutputTokens?: number;
+  /** True when this allocation was priced (in full or in part) using a
+   * user-entered manual override rather than a real credit value or built-in
+   * table. */
+  hasManualPricing?: boolean;
 }

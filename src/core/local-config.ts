@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as crypto from 'crypto';
 import type { SessionResult, ProviderId, UsageSource } from './types';
+import { findSupersededOverrides, type ManualPriceOverride, type SupersededOverride } from './pricing';
 
 export interface CopilotConfig {
   enabled: boolean;
@@ -39,6 +40,18 @@ export interface LocalAllocation {
   /** responseIds counted in this allocation; used to deduplicate requests inherited
    * by forked sessions. Absent on legacy/CLI/manual allocations. */
   responseIds?: string[];
+  /** Number of requests this allocation represents with no known price at all
+   * (no credit, no built-in match). This allocation's own `costUsd` is 0 for
+   * these — deliberately excluded from the verified total, not a guess.
+   * Omitted when zero. */
+  unpricedRequestCount?: number;
+  /** Input/output tokens belonging to the unpriced requests counted above. */
+  unpricedInputTokens?: number;
+  unpricedOutputTokens?: number;
+  /** True when this allocation was priced (in full or in part) using a
+   * user-entered manual override rather than a real credit value or the
+   * built-in table. */
+  hasManualPricing?: boolean;
 }
 
 /** Unit used to display amounts in the UI. Cost is always stored in USD. */
@@ -58,6 +71,34 @@ export interface LocalConfig {
   displayUnit?: DisplayUnit;
   /** Whether the status bar shows today's or this period's spend; defaults to 'period'. */
   statusBarMetric?: StatusBarMetric;
+  /**
+   * User-transcribed prices for models Tokenyst doesn't (yet) recognize, keyed by
+   * the canonical model id (`resolveModel(...).id`). Entered via
+   * `Tokenyst: Set Manual Model Price`, normally by copying the numbers off the
+   * Copilot model picker's hover card. Only ever consulted as a last resort, when
+   * neither a real GitHub credit value nor a built-in table entry exists — see
+   * `resolveModel` in core/pricing.ts.
+   */
+  modelPriceOverrides?: Record<string, ManualPriceOverride>;
+  /**
+   * One-time notices queued when Tokenyst ships an official price for a model
+   * that previously had a manual override, so the user can be told their
+   * transcribed number is being replaced (and with what). Cleared once shown
+   * (see `drainSupersededPriceNotices`).
+   */
+  pendingPriceSupersessions?: SupersededOverride[];
+  /**
+   * Opt-in, OFF by default. When false/unset (the default), unpriced usage
+   * (see `LocalAllocation.unpricedRequestCount`) is NEVER blended into any
+   * displayed spend total — it's shown, if at all, only as a separate "N
+   * requests with unknown cost" indicator. When the user explicitly turns
+   * this on, the UI is additionally allowed to show a clearly-labeled,
+   * separate "unverified estimate" figure computed by
+   * `estimateUnverifiedSpendUsd` (core/pricing.ts) — still never merged into
+   * or replacing the verified total, always rendered alongside it with a
+   * disclaimer (e.g. "$435 verified + up to ~$50 unverified estimate").
+   */
+  showUnverifiedEstimates?: boolean;
 }
 
 const DEFAULT_CONFIG: LocalConfig = {
@@ -67,6 +108,7 @@ const DEFAULT_CONFIG: LocalConfig = {
   renewalDay: null,
   displayUnit: 'credits',
   statusBarMetric: 'period',
+  showUnverifiedEstimates: false,
 };
 
 export function getConfigDir(): string {
@@ -98,6 +140,10 @@ function normalizeAllocation(a: unknown): LocalAllocation {
     responseIds: Array.isArray(raw.responseIds)
       ? (raw.responseIds as unknown[]).filter((v): v is string => typeof v === 'string')
       : undefined,
+    unpricedRequestCount: raw.unpricedRequestCount != null ? Number(raw.unpricedRequestCount) : undefined,
+    unpricedInputTokens: raw.unpricedInputTokens != null ? Number(raw.unpricedInputTokens) : undefined,
+    unpricedOutputTokens: raw.unpricedOutputTokens != null ? Number(raw.unpricedOutputTokens) : undefined,
+    hasManualPricing: raw.hasManualPricing === true ? true : undefined,
   };
 }
 
@@ -270,6 +316,70 @@ export async function getLastRecordedTimestamp(transcriptPath: string): Promise<
   return entry != null ? entryTimestamp(entry) : null;
 }
 
+/**
+ * Record (or replace) a user-transcribed price for a model, keyed by its canonical
+ * id (`resolveModel(rawModelName).id`). Set via `Tokenyst: Set Manual Model Price`.
+ */
+export async function setManualModelPrice(
+  modelId: string,
+  inputPerMillion: number,
+  outputPerMillion: number,
+): Promise<void> {
+  await mutateConfig((cfg) => {
+    cfg.modelPriceOverrides ??= {};
+    cfg.modelPriceOverrides[modelId] = {
+      inputPerMillion,
+      outputPerMillion,
+      setAt: new Date().toISOString(),
+    };
+  });
+}
+
+/** Remove a manual price override without waiting for a supersession check. */
+export async function deleteManualModelPrice(modelId: string): Promise<void> {
+  await mutateConfig((cfg) => {
+    delete cfg.modelPriceOverrides?.[modelId];
+  });
+}
+
+/**
+ * Check every manual override against Tokenyst's built-in pricing table. Any that
+ * are now redundant (the built-in table ships an exact/family match) are removed
+ * from `modelPriceOverrides` and queued into `pendingPriceSupersessions` so the UI
+ * can tell the user their transcribed number was replaced with the real one. Call
+ * this once per sync/import cycle, before parsing sessions, so newly-superseded
+ * overrides don't linger and get used for one more cycle.
+ */
+export async function reconcileManualPriceOverrides(): Promise<SupersededOverride[]> {
+  // Cheap read-only peek first: most users never set a manual override, and this
+  // runs on every sync tick + import — don't pay for a load→save write cycle (and
+  // the atomic rename it performs) unless there's actually something to check.
+  const peek = await loadConfig();
+  if (!peek.modelPriceOverrides || Object.keys(peek.modelPriceOverrides).length === 0) return [];
+  if (findSupersededOverrides(peek.modelPriceOverrides).length === 0) return [];
+
+  return mutateConfig((cfg) => {
+    if (!cfg.modelPriceOverrides) return [];
+    const superseded = findSupersededOverrides(cfg.modelPriceOverrides);
+    if (superseded.length === 0) return [];
+    for (const s of superseded) delete cfg.modelPriceOverrides![s.id];
+    cfg.pendingPriceSupersessions = [...(cfg.pendingPriceSupersessions ?? []), ...superseded];
+    return superseded;
+  });
+}
+
+/**
+ * Return and clear the queued price-supersession notices (e.g. once the UI has
+ * shown them to the user via a notification/banner).
+ */
+export async function drainSupersededPriceNotices(): Promise<SupersededOverride[]> {
+  return mutateConfig((cfg) => {
+    const pending = cfg.pendingPriceSupersessions ?? [];
+    cfg.pendingPriceSupersessions = [];
+    return pending;
+  });
+}
+
 export async function getRecordedPct(transcriptPath: string): Promise<string | undefined> {
   const map = await readRecordedTurns();
   const entry = map[normalizeDedupKey(transcriptPath)];
@@ -356,6 +466,13 @@ export function applyCopilotSessionUpsert(
     if (session.title) existing.title = session.title;
     if (session.at) existing.at = session.at;
     if (session.responseIds) existing.responseIds = session.responseIds;
+    // Assigned unconditionally (unlike the fields above): a re-synced session whose
+    // model has since gained a price carries no unpriced counters, and must CLEAR the
+    // stale ones rather than keep reporting usage that is no longer unpriced.
+    existing.unpricedRequestCount = session.unpricedRequestCount;
+    existing.unpricedInputTokens = session.unpricedInputTokens;
+    existing.unpricedOutputTokens = session.unpricedOutputTokens;
+    existing.hasManualPricing = session.hasManualPricing;
     return { success: true, inserted: false };
   }
 
@@ -383,6 +500,10 @@ export function applyCopilotSessionUpsert(
     sessionId: session.sessionId,
     title: session.title,
     responseIds: session.responseIds,
+    unpricedRequestCount: session.unpricedRequestCount,
+    unpricedInputTokens: session.unpricedInputTokens,
+    unpricedOutputTokens: session.unpricedOutputTokens,
+    hasManualPricing: session.hasManualPricing,
   });
   return { success: true, inserted: true };
 }

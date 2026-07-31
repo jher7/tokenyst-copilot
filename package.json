@@ -160,6 +160,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show active budget usage in the status bar."
+        },
+        "tokenyst.experimental.useLiveModelPricing": {
+          "type": "boolean",
+          "default": false,
+          "description": "EXPERIMENTAL, off by default. When enabled, prefer live per-model pricing from VS Code's Language Model API (vscode.lm.selectChatModels()[].inputCost/outputCost) over Tokenyst's built-in pricing table, when available. This has no effect in the version of Tokenyst published to the Marketplace: it depends on VS Code's unstable 'languageModelPricing' proposed API, which this build does not declare (declaring it would make the extension unpublishable — see src/core/live-model-pricing.ts). It only takes effect in a locally-built, non-Marketplace package where a maintainer has explicitly added \"enabledApiProposals\": [\"languageModelPricing\"] to package.json and run VS Code with proposed-API access. Safe to leave on: if the proposal isn't available, Tokenyst detects that (no numeric inputCost/outputCost on the returned models) and silently falls back to the built-in table — no error, no crash."
         }
       }
     }

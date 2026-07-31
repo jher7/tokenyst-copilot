@@ -354,3 +354,86 @@ describe('loadConfig with a corrupt file', () => {
     expect(cfg.copilot).toBeUndefined();
   });
 });
+
+describe('unpriced / manually-priced fields survive the storage layer', () => {
+  const unpricedSession = {
+    costUsd: 0,
+    model: 'grok-5-code',
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheCreationTokens: null,
+    cacheReadTokens: null,
+    filesModified: [],
+    provider: 'copilot' as const,
+    externalId: 'copilot-chat-s1-grok-5-code-unpriced',
+    source: 'chat' as const,
+    at: '2026-05-01T08:00:00.000Z',
+    sessionId: 's1',
+    unpricedRequestCount: 7,
+    unpricedInputTokens: 50000,
+    unpricedOutputTokens: 10000,
+  };
+
+  beforeEach(async () => {
+    holder.home = await fs.mkdtemp(path.join(os.tmpdir(), 'tokenyst-test-'));
+    await saveConfig({ allocations: [], enabled: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(holder.home, { recursive: true, force: true });
+  });
+
+  it('persists the unpriced counters through insert → save → load', async () => {
+    // Without these fields the allocation lands as an indistinguishable $0 row and
+    // the UI reads genuinely-unknown spend as "this model was free" — the exact
+    // misrepresentation the unpriced bucket exists to prevent.
+    await upsertCopilotSessionAllocation(unpricedSession);
+
+    const cfg = await loadConfig();
+    expect(cfg.allocations).toHaveLength(1);
+    expect(cfg.allocations[0].unpricedRequestCount).toBe(7);
+    expect(cfg.allocations[0].unpricedInputTokens).toBe(50000);
+    expect(cfg.allocations[0].unpricedOutputTokens).toBe(10000);
+  });
+
+  it('persists hasManualPricing through insert → save → load', async () => {
+    await upsertCopilotSessionAllocation({
+      ...unpricedSession,
+      costUsd: 18,
+      externalId: 'copilot-chat-s2-grok-5-code',
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      unpricedRequestCount: undefined,
+      unpricedInputTokens: undefined,
+      unpricedOutputTokens: undefined,
+      hasManualPricing: true,
+    });
+
+    const cfg = await loadConfig();
+    expect(cfg.allocations[0].hasManualPricing).toBe(true);
+  });
+
+  it('CLEARS stale counters when a re-synced session is no longer unpriced', async () => {
+    await upsertCopilotSessionAllocation(unpricedSession);
+
+    // Same externalId, re-synced after the model gained a price: the counters are
+    // absent now, so the stored ones must go rather than linger as phantom
+    // "unknown cost" usage that is in fact priced and counted in costUsd.
+    await upsertCopilotSessionAllocation({
+      ...unpricedSession,
+      costUsd: 18,
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      unpricedRequestCount: undefined,
+      unpricedInputTokens: undefined,
+      unpricedOutputTokens: undefined,
+    });
+
+    const cfg = await loadConfig();
+    expect(cfg.allocations).toHaveLength(1);
+    expect(cfg.allocations[0].costUsd).toBe(18);
+    expect(cfg.allocations[0].unpricedRequestCount).toBeUndefined();
+    expect(cfg.allocations[0].unpricedInputTokens).toBeUndefined();
+    expect(cfg.allocations[0].unpricedOutputTokens).toBeUndefined();
+  });
+});

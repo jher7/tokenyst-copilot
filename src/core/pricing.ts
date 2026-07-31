@@ -99,13 +99,32 @@ function familyKey(c: string): string | null {
  * and its pricing. The id is the matched `MODEL_PRICING` key when one exists, so
  * the same model logged in different forms collapses to one bucket for grouping
  * and `externalId`. Unlisted models fall back to a generic family price (or null).
+ *
+ * `overrides` is an optional map of user-transcribed manual prices, keyed by the
+ * same canonical `id` this function returns. It is consulted only when neither
+ * an exact table entry nor a family fallback exists — a built-in (maintainer-
+ * curated) price always takes priority over a manual one, since it's presumed
+ * more accurate once it exists. Set `resolveModel(raw)` (no further arguments)
+ * to check built-in pricing alone, e.g. to detect when an override has become
+ * redundant (see `findSupersededOverrides`).
+ *
+ * `livePricing` is an optional map of live per-model rates sourced directly
+ * from the model provider via VS Code's *proposed, unstable*
+ * `languageModelPricing` API (see `core/live-model-pricing.ts`) — gated behind
+ * the `tokenyst.experimental.useLiveModelPricing` setting and empty in the
+ * published build (that build never declares the proposal). When present for
+ * a given model id, it takes priority over even the built-in table, since it
+ * reflects the provider's current real rate rather than a maintainer-curated
+ * snapshot that can go stale.
  */
-export function resolveModel(raw: string): { id: string; pricing: PricingEntry | null } {
+export function resolveModel(
+  raw: string,
+  overrides?: Readonly<Record<string, ManualPriceOverride>>,
+  livePricing?: Readonly<Record<string, PricingEntry>>,
+): { id: string; pricing: PricingEntry | null; manual?: boolean; live?: boolean } {
   const c = canon(raw);
   const key = CANON_TO_KEY.get(c);
-  if (key) return { id: key, pricing: MODEL_PRICING[key] };
-
-  const fam = familyKey(c);
+  const fam = !key ? familyKey(c) : undefined;
   const cleaned = raw
     .toLowerCase()
     .replace(/-\d{4}-\d{2}-\d{2}$/, '')
@@ -113,7 +132,18 @@ export function resolveModel(raw: string): { id: string; pricing: PricingEntry |
     .trim()
     .replace(/\s+/g, '-')
     .replace(/^copilot-/, '');
-  return { id: `copilot-${cleaned}`, pricing: fam ? MODEL_PRICING[fam] : null };
+  const id = key ?? `copilot-${cleaned}`;
+
+  const live = livePricing?.[id];
+  if (live) return { id, pricing: live, live: true };
+
+  if (key) return { id, pricing: MODEL_PRICING[key] };
+  if (fam) return { id, pricing: MODEL_PRICING[fam] };
+
+  const manualEntry = overrides?.[id];
+  if (manualEntry) return { id, pricing: manualEntry, manual: true };
+
+  return { id, pricing: null };
 }
 
 export function calculateCost(
@@ -122,12 +152,81 @@ export function calculateCost(
   outputTokens: number,
   cacheCreationTokens = 0,
   cacheReadTokens = 0,
+  overrides?: Readonly<Record<string, ManualPriceOverride>>,
+  livePricing?: Readonly<Record<string, PricingEntry>>,
 ): number | null {
-  const { pricing } = resolveModel(model);
+  const { pricing } = resolveModel(model, overrides, livePricing);
   if (!pricing) return null;
 
   return (inputTokens / 1000000) * pricing.inputPerMillion
        + (outputTokens / 1000000) * pricing.outputPerMillion
        + (cacheCreationTokens / 1000000) * pricing.inputPerMillion * CACHE_WRITE_MULTIPLIER
        + (cacheReadTokens / 1000000) * pricing.inputPerMillion * CACHE_READ_MULTIPLIER;
+}
+
+/**
+ * A user-transcribed price for a model Tokenyst doesn't (yet) recognize, entered
+ * via `Tokenyst: Set Manual Model Price` by copying the numbers off the Copilot
+ * model picker's hover card in VS Code (which shows official per-million-token
+ * input/output pricing for every model, sourced live from the model provider).
+ * Used only as a last resort — see `resolveModel`.
+ */
+export interface ManualPriceOverride extends PricingEntry {
+  /** ISO timestamp the user entered this override, for display/audit purposes. */
+  setAt: string;
+}
+
+/**
+ * Check every manually-overridden model id against the *built-in* pricing table
+ * alone (bypassing overrides): once Tokenyst ships an official exact/family match
+ * for that id, the manual entry is redundant and should be superseded. Returns
+ * one entry per override that's now redundant, carrying both the old (manual)
+ * and new (official) rates so the caller can show the user exactly what changed
+ * before dropping the override.
+ */
+export interface SupersededOverride {
+  id: string;
+  manual: PricingEntry;
+  official: PricingEntry;
+}
+
+export function findSupersededOverrides(
+  overrides: Readonly<Record<string, ManualPriceOverride>>,
+): SupersededOverride[] {
+  const out: SupersededOverride[] = [];
+  for (const [id, manual] of Object.entries(overrides)) {
+    const { pricing: official } = resolveModel(id); // no overrides passed: built-in table only
+    if (official) out.push({ id, manual, official });
+  }
+  return out;
+}
+
+/**
+ * The rate used ONLY by `estimateUnverifiedSpendUsd`, for tokens Tokenyst has no
+ * real price for at all (no credit, no built-in match, no manual override).
+ * Deliberately the priciest known family tier, so the number this produces errs
+ * toward NOT under-promising a budget overrun if the user chooses to look at it.
+ *
+ * This is NOT used anywhere in the authoritative cost path (`calculateCost`,
+ * `resolveModel`). It exists solely to answer, on demand, "if I had to guess,
+ * about how much might this unpriced usage have cost?" — and every caller of
+ * `estimateUnverifiedSpendUsd` must render the result as a separate, clearly
+ * labeled, non-authoritative figure (e.g. "~$12 unverified estimate"), never
+ * merged into or replacing a verified total.
+ */
+const UNVERIFIED_ESTIMATE_RATE: PricingEntry = MODEL_PRICING['claude-opus'];
+
+/**
+ * Rough, explicitly-labeled *guess* at the dollar cost of usage Tokenyst has no
+ * real price for (see `CopilotSessionUsage.unpricedRequestCount` /
+ * `LocalAllocation.unpricedRequestCount`). This is a fabricated number by
+ * construction — it must NEVER be computed or displayed unless the user has
+ * explicitly opted in via `LocalConfig.showUnverifiedEstimates`, and even then
+ * only as a distinct, clearly-labeled figure alongside (never blended into)
+ * the verified `costUsd` total. Callers are responsible for enforcing both of
+ * those rules; this function only does the arithmetic.
+ */
+export function estimateUnverifiedSpendUsd(unpricedInputTokens: number, unpricedOutputTokens: number): number {
+  return (unpricedInputTokens / 1000000) * UNVERIFIED_ESTIMATE_RATE.inputPerMillion
+       + (unpricedOutputTokens / 1000000) * UNVERIFIED_ESTIMATE_RATE.outputPerMillion;
 }
