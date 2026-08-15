@@ -11,6 +11,19 @@ Section guide (omit any that are empty for a release):
 -->
 
 <!-- ## [Unreleased] -->
+## [0.5.7] - 2026-08-15
+### Fixed
+- **Requests billed at exactly "1 credit" were priced by estimate**: GitHub writes the real per-request cost into the session file as either "12.3 credits" or the singular "1 credit". Only the plural form was recognized, so single-credit requests silently fell back to Tokenyst's token-based estimate (~$0.006 instead of the real $0.01). Both spellings are now matched.
+
+- **Usage on unrecognized models no longer silently disappears**: a request with no GitHub-recorded credit value and no match in the built-in pricing table was treated as costing $0, and the whole allocation was then dropped — so real spend on a newly shipped or renamed premium model contributed nothing to your total, with no warning. Those requests are now kept in a separate, non-monetary "unpriced" bucket (request count and input/output tokens) that is never folded into the displayed cost, so the total stays honest instead of understated.
+
+### Added
+- **Manual model pricing** (`modelPriceOverrides` in `~/.tokenyst/config.json`): transcribe a model's per-million-token input/output price from the Copilot model picker's hover card so unrecognized models can be priced. It's consulted only as a last resort — a real per-request credit value and the built-in pricing table both win over it. When a later Tokenyst release adds real pricing for that model, the now-redundant override is dropped automatically and a one-time notice is queued.
+
+- **Experimental live model pricing** (`tokenyst.experimental.useLiveModelPricing`, default off): prefer per-model pricing published live by VS Code's Language Model API over the built-in table. This has **no effect in the Marketplace build** — it depends on VS Code's unstable `languageModelPricing` proposed API, which a publishable extension can't declare. It's safe to leave enabled: when the proposal isn't available, Tokenyst falls back to the built-in table silently.
+
+- **Unverified-spend estimate** (`showUnverifiedEstimates`, default off): opt-in arithmetic for a future UI to show a clearly-labeled guess for unpriced usage alongside the verified total (e.g. "$435 verified + up to ~$50 unverified estimate"). It is never blended into the authoritative total.
+
 ## [0.5.6] - 2026-07-06
 ### Fixed
 
