@@ -47,7 +47,7 @@ Tokenyst reads from two local sources and combines them into one budget:
 **Copilot CLI**
 
 4. The GitHub Copilot CLI records each session under `~/.copilot/session-state/<session>/events.jsonl`.
-5. Tokenyst watches those logs and reads the **real** AI-credit cost the CLI records for each model (the same "AI Credits" the CLI prints when it exits), so CLI spend matches GitHub exactly. Token counts are kept for transparency.
+5. Tokenyst watches those logs and reads per-model usage from cumulative checkpoints as well as shutdown events, using the **real** AI-credit cost recorded by the CLI. Token counts are kept for transparency. For sessions that predate this support, run **Tokenyst: Import Historical Usage** to backfill usage already on disk.
 
 For Chat requests where no credit value is recorded — and for older CLI logs that predate the credit field — Tokenyst estimates the cost from a token pricing table baked into the extension (matching GitHub's usage-based billing). All usage is stored as allocations in `~/.tokenyst/config.json`.
 
