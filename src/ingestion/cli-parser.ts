@@ -8,10 +8,9 @@ import { toTitle } from './chat-parser';
  * Per-session, per-model usage aggregated from a GitHub Copilot **CLI** session.
  *
  * The CLI writes one append-log `events.jsonl` per session under
- * `~/.copilot/session-state/<sessionId>/`. Usage is reported in `session.shutdown`
- * events as `data.modelMetrics[<model>].usage`. Those payloads are **incremental
- * per resume-cycle** (a session can resume/shutdown several times), so a session's
- * total is the sum across every `session.shutdown` event in the file.
+ * `~/.copilot/session-state/<sessionId>/`. Recent logs contain cumulative
+ * `providerModelMetrics` snapshots in checkpoints and shutdowns. Older logs only
+ * have incremental `modelMetrics` in shutdown events.
  *
  * The CLI records its own **authoritative** credit cost per model as `totalNanoAiu`
  * (1 AIU = 1 GitHub AI credit; "nano" = ×10⁻⁹), matching the "AI Credits" the CLI
@@ -131,20 +130,20 @@ interface ModelAcc {
   cacheWrite: number;
   /** Summed GitHub credit cost in nano-AIU (authoritative). */
   nanoAiu: number;
-  /** Whether any shutdown for this model reported `totalNanoAiu` at all. */
+  /** Whether any usage for this model reported `totalNanoAiu` at all. */
   sawAiu: boolean;
 }
 
 /**
- * Aggregate one Copilot CLI session file into per-model usage. Sums the
- * `modelMetrics` usage from every `session.shutdown` event (incremental
- * per-resume), then prices each model from its token totals. Returns one record
- * per model used in the session.
+ * Aggregate cumulative checkpoint/shutdown snapshots, or incremental legacy
+ * shutdowns, into one record per model.
  */
 export function parseCliSession(file: string, sessionId: string): CliSessionUsage[] {
   if (!fs.existsSync(file)) return [];
 
-  const perModel = new Map<string, ModelAcc>();
+  let perModel = new Map<string, ModelAcc>();
+  let hasSnapshot = false;
+  let resumedSinceSnapshot = false;
   const times: number[] = [];
   // The first user prompt (`user.message.data.content`) doubles as the session
   // title — the CLI's clean prompt text, before system-reminder transforms.
@@ -162,16 +161,35 @@ export function parseCliSession(file: string, sessionId: string): CliSessionUsag
       const content = d && typeof d['content'] === 'string' ? (d['content'] as string).trim() : '';
       if (content) firstPrompt = content;
     }
-    if (event['type'] !== 'session.shutdown') continue;
+    if (event['type'] === 'session.resume') resumedSinceSnapshot = true;
+    if (event['type'] !== 'session.shutdown' && event['type'] !== 'session.usage_checkpoint') continue;
 
-    const data = isObj(event['data']) ? (event['data'] as AnyObj) : undefined;
-    const metrics = isObj(data?.['modelMetrics']) ? (data!['modelMetrics'] as AnyObj) : undefined;
-    if (!metrics) continue;
+    const data = isObj(event['data']) ? event['data'] : undefined;
+    const snapshot = data?.['providerModelMetrics'];
+    const entries: [string, unknown][] = [];
+    if (Array.isArray(snapshot)) {
+      for (const item of snapshot) {
+        if (isObj(item) && typeof item['modelId'] === 'string' && isObj(item['metrics'])) {
+          entries.push([item['modelId'], item['metrics']]);
+        }
+      }
+    }
 
-    for (const [rawModel, entry] of Object.entries(metrics)) {
-      const usage = isObj(entry) && isObj((entry as AnyObj)['usage'])
-        ? ((entry as AnyObj)['usage'] as AnyObj)
-        : undefined;
+    const validSnapshot = entries.some(([, entry]) => isObj(entry) && isObj(entry['usage']));
+    if (validSnapshot) {
+      perModel = new Map<string, ModelAcc>();
+      hasSnapshot = true;
+      resumedSinceSnapshot = false;
+    } else {
+      if (event['type'] !== 'session.shutdown' || (hasSnapshot && !resumedSinceSnapshot)) continue;
+      const metrics = isObj(data?.['modelMetrics']) ? data['modelMetrics'] : undefined;
+      if (!metrics) continue;
+      entries.length = 0;
+      entries.push(...Object.entries(metrics));
+    }
+
+    for (const [rawModel, entry] of entries) {
+      const usage = isObj(entry) && isObj(entry['usage']) ? entry['usage'] : undefined;
       if (!usage) continue;
       // Group by resolved model id so the same model logged in different forms
       // collapses to one bucket (and one externalId), matching the Chat parser.
@@ -182,7 +200,7 @@ export function parseCliSession(file: string, sessionId: string): CliSessionUsag
       acc.output += num(usage['outputTokens']); // already includes reasoning tokens
       acc.cacheRead += num(usage['cacheReadTokens']);
       acc.cacheWrite += num(usage['cacheWriteTokens']);
-      const aiu = (entry as AnyObj)['totalNanoAiu'];
+      const aiu = isObj(entry) ? entry['totalNanoAiu'] : undefined;
       if (typeof aiu === 'number' && Number.isFinite(aiu)) {
         acc.nanoAiu += aiu;
         acc.sawAiu = true;

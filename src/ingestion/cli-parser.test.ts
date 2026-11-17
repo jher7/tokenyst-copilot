@@ -10,6 +10,11 @@ function shutdown(modelMetrics: object, timestamp: string): string {
   return JSON.stringify({ type: 'session.shutdown', timestamp, data: { modelMetrics } });
 }
 
+function snapshot(type: 'session.usage_checkpoint' | 'session.shutdown', models: Record<string, object>): string {
+  const providerModelMetrics = Object.entries(models).map(([modelId, metrics]) => ({ modelId, metrics }));
+  return JSON.stringify({ type, timestamp: '2026-05-28T14:41:44.798Z', data: { providerModelMetrics } });
+}
+
 function usage(over: Partial<Record<string, number>>): object {
   return {
     inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
@@ -113,6 +118,68 @@ describe('parseCliSession', () => {
 
     // Timestamp is the latest event in the file.
     expect(gpt.timestamp).toBe('2026-05-28T14:47:32.688Z');
+  });
+
+  it('uses the latest cumulative checkpoint for an ongoing session', () => {
+    const id = 'sess-checkpoint';
+    const file = writeSession(id, [
+      snapshot('session.usage_checkpoint', {
+        'gpt-5-mini': model({ inputTokens: 1000, outputTokens: 100 }, 100_000_000),
+      }),
+      snapshot('session.usage_checkpoint', {
+        'gpt-5-mini': model({ inputTokens: 3000, outputTokens: 300, cacheReadTokens: 500 }, 300_000_000),
+        'claude-haiku-4.5': model({ inputTokens: 800, outputTokens: 40 }, 50_000_000),
+      }),
+    ]);
+
+    const records = parseCliSession(file, id);
+    expect(records).toHaveLength(2);
+    const gpt = records.find(r => r.model === 'copilot-gpt-5-mini')!;
+    expect(gpt.inputTokens).toBe(3000);
+    expect(gpt.cacheReadTokens).toBe(500);
+    expect(gpt.costUsd).toBeCloseTo(0.003, 10);
+    expect(records.find(r => r.model === 'copilot-claude-haiku-4.5')!.costUsd).toBeCloseTo(0.0005, 10);
+  });
+
+  it('does not double-count cumulative checkpoints and shutdowns across resumes', () => {
+    const id = 'sess-resumed';
+    const file = writeSession(id, [
+      snapshot('session.usage_checkpoint', { 'gpt-5-mini': model({ inputTokens: 1000 }, 100_000_000) }),
+      snapshot('session.shutdown', { 'gpt-5-mini': model({ inputTokens: 1200 }, 120_000_000) }),
+      JSON.stringify({ type: 'session.resume', data: {} }),
+      snapshot('session.usage_checkpoint', { 'gpt-5-mini': model({ inputTokens: 2000 }, 200_000_000) }),
+      snapshot('session.shutdown', { 'gpt-5-mini': model({ inputTokens: 2000 }, 200_000_000) }),
+      JSON.stringify({ type: 'session.resume', data: {} }),
+      snapshot('session.usage_checkpoint', { 'gpt-5-mini': model({ inputTokens: 2500 }, 250_000_000) }),
+    ]);
+    const [rec] = parseCliSession(file, id);
+    expect(rec.inputTokens).toBe(2500);
+    expect(rec.costUsd).toBeCloseTo(0.0025, 10);
+  });
+
+  it('replaces preceding legacy totals with a cumulative snapshot and skips overlapping shutdowns', () => {
+    const id = 'sess-transition';
+    const file = writeSession(id, [
+      shutdown({ 'gpt-5-mini': model({ inputTokens: 1000 }, 100_000_000) }, '2026-05-28T14:41:40.000Z'),
+      JSON.stringify({ type: 'session.resume', data: {} }),
+      snapshot('session.usage_checkpoint', { 'gpt-5-mini': model({ inputTokens: 1500 }, 150_000_000) }),
+      shutdown({ 'gpt-5-mini': model({ inputTokens: 1500 }, 150_000_000) }, '2026-05-28T14:41:50.000Z'),
+      JSON.stringify({ type: 'session.resume', data: {} }),
+      shutdown({ 'gpt-5-mini': model({ inputTokens: 200 }, 20_000_000) }, '2026-05-28T14:42:00.000Z'),
+    ]);
+    const [rec] = parseCliSession(file, id);
+    expect(rec.inputTokens).toBe(1700);
+    expect(rec.costUsd).toBeCloseTo(0.0017, 10);
+  });
+
+  it('keeps the previous checkpoint when a later checkpoint lacks model usage', () => {
+    const id = 'sess-partial';
+    const file = writeSession(id, [
+      snapshot('session.usage_checkpoint', { 'gpt-5-mini': model({ inputTokens: 1000 }, 100_000_000) }),
+      JSON.stringify({ type: 'session.usage_checkpoint', data: { providerModelMetrics: [] } }),
+    ]);
+    const [rec] = parseCliSession(file, id);
+    expect(rec.inputTokens).toBe(1000);
   });
 
   it('falls back to token pricing when totalNanoAiu is absent (older logs)', () => {
